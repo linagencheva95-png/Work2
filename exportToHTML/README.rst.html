@@ -1,0 +1,201 @@
+<html>
+<head>
+<title>README.rst</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #1750eb;}
+.s1 { color: #080808;}
+.s2 { color: #080808; font-weight: bold;}
+.s3 { color: #080808;}
+.s4 { color: #080808; font-style: italic;}
+.s5 { color: #067d17;}
+.s6 { color: #080808;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+README.rst</font>
+</center></td></tr></table>
+<pre><span class="s0">================ 
+Vendoring Policy 
+================ 
+</span>
+<span class="s1">* Vendored libraries </span><span class="s2">**MUST** </span><span class="s1">not be modified except as required to</span>
+  <span class="s1">successfully vendor them.</span>
+<span class="s1">* Vendored libraries </span><span class="s2">**MUST** </span><span class="s1">be released copies of libraries available on</span>
+  <span class="s1">PyPI.</span>
+<span class="s1">* Vendored libraries </span><span class="s2">**MUST** </span><span class="s1">be available under a license that allows</span>
+  <span class="s1">them to be integrated into </span><span class="s3">``pip``</span><span class="s1">, which is released under the MIT license.</span>
+<span class="s1">* Vendored libraries </span><span class="s2">**MUST** </span><span class="s1">be accompanied with LICENSE files.</span>
+<span class="s1">* The versions of libraries vendored in pip </span><span class="s2">**MUST** </span><span class="s1">be reflected in</span>
+  <span class="s3">``pip/_vendor/vendor.txt``</span><span class="s1">.</span>
+<span class="s1">* Vendored libraries </span><span class="s2">**MUST** </span><span class="s1">function without any build steps such as </span><span class="s3">``2to3``</span>
+  <span class="s1">or compilation of C code, practically this limits to single source 2.x/3.x and</span>
+  <span class="s1">pure Python.</span>
+<span class="s1">* Any modifications made to libraries </span><span class="s2">**MUST** </span><span class="s1">be noted in</span>
+  <span class="s3">``pip/_vendor/README.rst`` </span><span class="s1">and their corresponding patches </span><span class="s2">**MUST** </span><span class="s1">be</span>
+  <span class="s1">included </span><span class="s3">``tools/vendoring/patches``</span><span class="s1">.</span>
+<span class="s1">* Vendored libraries should have corresponding </span><span class="s3">``vendored()`` </span><span class="s1">entries in</span>
+  <span class="s3">``pip/_vendor/__init__.py``</span><span class="s1">.</span>
+
+<span class="s0">Rationale 
+========= 
+</span>
+<span class="s1">Historically pip has not had any dependencies except for </span><span class="s3">``setuptools`` </span><span class="s1">itself,</span>
+<span class="s1">choosing instead to implement any functionality it needed to prevent needing</span>
+<span class="s1">a dependency. However, starting with pip 1.5, we began to replace code that was</span>
+<span class="s1">implemented inside of pip with reusable libraries from PyPI. This brought the</span>
+<span class="s1">typical benefits of reusing libraries instead of reinventing the wheel like</span>
+<span class="s1">higher quality and more battle tested code, centralization of bug fixes</span>
+<span class="s1">(particularly security sensitive ones), and better/more features for less work.</span>
+
+<span class="s1">However, there are several issues with having dependencies in the traditional</span>
+<span class="s1">way (via </span><span class="s3">``install_requires``</span><span class="s1">) for pip. These issues are:</span>
+
+<span class="s2">**Fragility**</span>
+   <span class="s1">When pip depends on another library to function then if for whatever reason</span>
+   <span class="s1">that library either isn't installed or an incompatible version is installed</span>
+   <span class="s1">then pip ceases to function. This is of course true for all Python</span>
+   <span class="s1">applications, however for every application </span><span class="s4">*except* </span><span class="s1">for pip the way you fix</span>
+   <span class="s1">it is by re-running pip. Obviously, when pip can't run, you can't use pip to</span>
+   <span class="s1">fix pip, so you're left having to manually resolve dependencies and</span>
+   <span class="s1">installing them by hand.</span>
+
+<span class="s2">**Making other libraries uninstallable**</span>
+   <span class="s1">One of pip's current dependencies is the </span><span class="s3">``requests`` </span><span class="s1">library, for which pip</span>
+   <span class="s1">requires a fairly recent version to run.  If pip depended on </span><span class="s3">``requests`` </span><span class="s1">in</span>
+   <span class="s1">the traditional manner, then we'd either have to maintain compatibility with</span>
+   <span class="s1">every </span><span class="s3">``requests`` </span><span class="s1">version that has ever existed (and ever will), OR allow</span>
+   <span class="s1">pip to render certain versions of </span><span class="s3">``requests`` </span><span class="s1">uninstallable. (The second</span>
+   <span class="s1">issue, although technically true for any Python application, is magnified by</span>
+   <span class="s1">pip's ubiquity; pip is installed by default in Python, in </span><span class="s3">``pyvenv``</span><span class="s1">, and in</span>
+   <span class="s3">``virtualenv``</span><span class="s1">.)</span>
+
+<span class="s2">**Security**</span>
+   <span class="s1">This might seem puzzling at first glance, since vendoring has a tendency to</span>
+   <span class="s1">complicate updating dependencies for security updates, and that holds true</span>
+   <span class="s1">for pip. However, given the </span><span class="s4">*other* </span><span class="s1">reasons for avoiding dependencies, the</span>
+   <span class="s1">alternative is for pip to reinvent the wheel itself.  This is what pip did</span>
+   <span class="s1">historically. It forced pip to re-implement its own HTTPS verification</span>
+   <span class="s1">routines as a workaround for the Python standard library's lack of SSL</span>
+   <span class="s1">validation, which resulted in similar bugs in the validation routine in</span>
+   <span class="s3">``requests`` </span><span class="s1">and </span><span class="s3">``urllib3``</span><span class="s1">, except that they had to be discovered and</span>
+   <span class="s1">fixed independently. Even though we're vendoring, reusing libraries keeps</span>
+   <span class="s1">pip more secure by relying on the great work of our dependencies, </span><span class="s4">*and*</span>
+   <span class="s1">allowing for faster, easier security fixes by simply pulling in newer</span>
+   <span class="s1">versions of dependencies.</span>
+
+<span class="s2">**Bootstrapping**</span>
+   <span class="s1">Currently most popular methods of installing pip rely on pip's</span>
+   <span class="s1">self-contained nature to install pip itself. These tools work by bundling a</span>
+   <span class="s1">copy of pip, adding it to </span><span class="s3">``sys.path``</span><span class="s1">, and then executing that copy of pip.</span>
+   <span class="s1">This is done instead of implementing a &quot;mini installer&quot; (to reduce</span>
+   <span class="s1">duplication); pip already knows how to install a Python package, and is far</span>
+   <span class="s1">more battle-tested than any &quot;mini installer&quot; could ever possibly be.</span>
+
+<span class="s1">Many downstream redistributors have policies against this kind of bundling, and</span>
+<span class="s1">instead opt to patch the software they distribute to debundle it and make it</span>
+<span class="s1">rely on the global versions of the software that they already have packaged</span>
+<span class="s1">(which may have its own patches applied to it). We (the pip team) would prefer</span>
+<span class="s1">it if pip was </span><span class="s4">*not* </span><span class="s1">debundled in this manner due to the above reasons and</span>
+<span class="s1">instead we would prefer it if pip would be left intact as it is now.</span>
+
+<span class="s1">In the longer term, if someone has a </span><span class="s4">*portable* </span><span class="s1">solution to the above problems,</span>
+<span class="s1">other than the bundling method we currently use, that doesn't add additional</span>
+<span class="s1">problems that are unreasonable then we would be happy to consider, and possibly</span>
+<span class="s1">switch to said method. This solution must function correctly across all of the</span>
+<span class="s1">situation that we expect pip to be used and not mandate some external mechanism</span>
+<span class="s1">such as OS packages.</span>
+
+
+<span class="s0">Modifications 
+============= 
+</span>
+<span class="s1">* </span><span class="s3">``setuptools`` </span><span class="s1">is completely stripped to only keep </span><span class="s3">``pkg_resources``</span><span class="s1">.</span>
+<span class="s1">* </span><span class="s3">``pkg_resources`` </span><span class="s1">has been modified to import its dependencies from</span>
+  <span class="s3">``pip._vendor``</span><span class="s1">, and to use the vendored copy of </span><span class="s3">``platformdirs``</span>
+  <span class="s1">rather than </span><span class="s3">``appdirs``</span><span class="s1">.</span>
+<span class="s1">* </span><span class="s3">``packaging`` </span><span class="s1">has been modified to import its dependencies from</span>
+  <span class="s3">``pip._vendor``</span><span class="s1">.</span>
+<span class="s1">* </span><span class="s3">``CacheControl`` </span><span class="s1">has been modified to import its dependencies from</span>
+  <span class="s3">``pip._vendor``</span><span class="s1">.</span>
+<span class="s1">* </span><span class="s3">``requests`` </span><span class="s1">has been modified to import its other dependencies from</span>
+  <span class="s3">``pip._vendor`` </span><span class="s1">and to </span><span class="s4">*not* </span><span class="s1">load </span><span class="s3">``simplejson`` </span><span class="s1">(all platforms) and</span>
+  <span class="s3">``pyopenssl`` </span><span class="s1">(Windows).</span>
+<span class="s1">* </span><span class="s3">``platformdirs`` </span><span class="s1">has been modified to import its submodules from </span><span class="s3">``pip._vendor.platformdirs``</span><span class="s1">.</span>
+
+<span class="s0">Automatic Vendoring 
+=================== 
+</span>
+<span class="s1">Vendoring is automated via the </span><span class="s5">`vendoring &lt;https://pypi.org/project/vendoring/&gt;`_ </span><span class="s1">tool from the content of</span>
+<span class="s3">``pip/_vendor/vendor.txt`` </span><span class="s1">and the different patches in</span>
+<span class="s3">``tools/vendoring/patches``</span><span class="s1">.</span>
+<span class="s1">Launch it via </span><span class="s3">``vendoring sync . -v`` </span><span class="s1">(requires </span><span class="s3">``vendoring&gt;=0.2.2``</span><span class="s1">).</span>
+<span class="s1">Tool configuration is done via </span><span class="s3">``pyproject.toml``</span><span class="s1">.</span>
+
+<span class="s1">To update the vendored library versions, we have a session defined in </span><span class="s3">``nox``</span><span class="s1">.</span>
+<span class="s1">The command to upgrade everything is:: 
+ 
+    </span><span class="s6">nox -s vendoring -- --upgrade-all --skip setuptools 
+ 
+</span><span class="s1">We do not upgrade </span><span class="s3">``setuptools``</span><span class="s1">, because we only rely on </span><span class="s3">``pkg_resources``</span><span class="s1">,</span>
+<span class="s1">and tracking every </span><span class="s3">``setuptools`` </span><span class="s1">change is unnecessary for our needs.</span>
+
+
+<span class="s0">Managing Local Patches 
+====================== 
+</span>
+<span class="s1">The </span><span class="s3">``vendoring`` </span><span class="s1">tool automatically applies our local patches, but updating,</span>
+<span class="s1">the patches sometimes no longer apply cleanly. In that case, the update will</span>
+<span class="s1">fail. To resolve this, take the following steps:</span>
+
+<span class="s1">1. Revert any incomplete changes in the revendoring branch, to ensure you have</span>
+   <span class="s1">a clean starting point.</span>
+<span class="s1">2. Run the revendoring of the library with a problem again: ``nox -s vendoring</span>
+   <span class="s1">-- --upgrade &lt;library_name&gt;``.</span>
+<span class="s1">3. This will fail again, but you will have the original source in your working</span>
+   <span class="s1">directory. Review the existing patch against the source, and modify the patch</span>
+   <span class="s1">to reflect the new version of the source. If you </span><span class="s3">``git add`` </span><span class="s1">the changes the</span>
+   <span class="s1">vendoring made, you can modify the source to reflect the patch file and then</span>
+   <span class="s1">generate a new patch with </span><span class="s3">``git diff``</span><span class="s1">.</span>
+<span class="s1">4. Now, revert everything </span><span class="s4">*except* </span><span class="s1">the patch file changes. Leave the modified</span>
+   <span class="s1">patch file unstaged but saved in the working tree.</span>
+<span class="s1">5. Re-run the vendoring. This time, it should pick up the changed patch file</span>
+   <span class="s1">and apply it cleanly. The patch file changes will be committed along with the</span>
+   <span class="s1">revendoring, so the new commit should be ready to test and publish as a PR.</span>
+
+
+<span class="s0">Debundling 
+========== 
+</span>
+<span class="s1">As mentioned in the rationale, we, the pip team, would prefer it if pip was not</span>
+<span class="s1">debundled (other than optionally </span><span class="s3">``pip/_vendor/requests/cacert.pem``</span><span class="s1">) and that</span>
+<span class="s1">pip was left intact. However, if you insist on doing so, we have a</span>
+<span class="s1">semi-supported method (that we don't test in our CI) and requires a bit of</span>
+<span class="s1">extra work on your end in order to solve the problems described above.</span>
+
+<span class="s1">1. Delete everything in </span><span class="s3">``pip/_vendor/`` </span><span class="s2">**except** </span><span class="s1">for</span>
+   <span class="s3">``pip/_vendor/__init__.py`` </span><span class="s1">and </span><span class="s3">``pip/_vendor/vendor.txt``</span><span class="s1">.</span>
+<span class="s1">2. Generate wheels for each of pip's dependencies (and any of their</span>
+   <span class="s1">dependencies) using your patched copies of these libraries. These must be</span>
+   <span class="s1">placed somewhere on the filesystem that pip can access (</span><span class="s3">``pip/_vendor`` </span><span class="s1">is</span>
+   <span class="s1">the default assumption).</span>
+<span class="s1">3. Modify </span><span class="s3">``pip/_vendor/__init__.py`` </span><span class="s1">so that the </span><span class="s3">``DEBUNDLED`` </span><span class="s1">variable is</span>
+   <span class="s3">``True``</span><span class="s1">.</span>
+<span class="s1">4. Upon installation, the </span><span class="s3">``INSTALLER`` </span><span class="s1">file in pip's own </span><span class="s3">``dist-info``</span>
+   <span class="s1">directory should be set to something other than </span><span class="s3">``pip``</span><span class="s1">, so that pip</span>
+   <span class="s1">can detect that it wasn't installed using itself.</span>
+<span class="s1">5. </span><span class="s4">*(optional)* </span><span class="s1">If you've placed the wheels in a location other than</span>
+   <span class="s3">``pip/_vendor/``</span><span class="s1">, then modify </span><span class="s3">``pip/_vendor/__init__.py`` </span><span class="s1">so that the</span>
+   <span class="s3">``WHEEL_DIR`` </span><span class="s1">variable points to the location you've placed them.</span>
+<span class="s1">6. </span><span class="s4">*(optional)* </span><span class="s1">Update the </span><span class="s3">``pip_self_version_check`` </span><span class="s1">logic to use the</span>
+   <span class="s1">appropriate logic for determining the latest available version of pip and</span>
+   <span class="s1">prompt the user with the correct upgrade message.</span>
+
+<span class="s1">Note that partial debundling is </span><span class="s2">**NOT** </span><span class="s1">supported. You need to prepare wheels</span>
+<span class="s1">for all dependencies for successful debundling.</span>
+</pre>
+</body>
+</html>

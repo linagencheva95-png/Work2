@@ -1,0 +1,357 @@
+<html>
+<head>
+<title>exceptions.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #0033b3;}
+.s1 { color: #080808;}
+.s2 { color: #8c8c8c; font-style: italic;}
+.s3 { color: #067d17;}
+.s4 { color: #0037a6;}
+.s5 { color: #1750eb;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+exceptions.py</font>
+</center></td></tr></table>
+<pre><span class="s0">from </span><span class="s1">__future__ </span><span class="s0">import </span><span class="s1">annotations</span>
+
+<span class="s0">import </span><span class="s1">socket</span>
+<span class="s0">import </span><span class="s1">typing</span>
+<span class="s0">import </span><span class="s1">warnings</span>
+<span class="s0">from </span><span class="s1">email.errors </span><span class="s0">import </span><span class="s1">MessageDefect</span>
+<span class="s0">from </span><span class="s1">http.client </span><span class="s0">import </span><span class="s1">IncompleteRead </span><span class="s0">as </span><span class="s1">httplib_IncompleteRead</span>
+
+<span class="s0">if </span><span class="s1">typing.TYPE_CHECKING:</span>
+    <span class="s0">from </span><span class="s1">.connection </span><span class="s0">import </span><span class="s1">HTTPConnection</span>
+    <span class="s0">from </span><span class="s1">.connectionpool </span><span class="s0">import </span><span class="s1">ConnectionPool</span>
+    <span class="s0">from </span><span class="s1">.response </span><span class="s0">import </span><span class="s1">HTTPResponse</span>
+    <span class="s0">from </span><span class="s1">.util.retry </span><span class="s0">import </span><span class="s1">Retry</span>
+
+<span class="s2"># Base Exceptions</span>
+
+
+<span class="s0">class </span><span class="s1">HTTPError(Exception):</span>
+    <span class="s2">&quot;&quot;&quot;Base exception used by this module.&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">HTTPWarning(Warning):</span>
+    <span class="s2">&quot;&quot;&quot;Base warning used by this module.&quot;&quot;&quot;</span>
+
+
+<span class="s1">_TYPE_REDUCE_RESULT = tuple[typing.Callable[..., object], tuple[object, ...]]</span>
+
+
+<span class="s0">class </span><span class="s1">PoolError(HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot;Base exception for errors caused within a pool.&quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">__init__(self, pool: ConnectionPool, message: str) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">self.pool = pool</span>
+        <span class="s1">self._message = message</span>
+        <span class="s1">super().__init__(</span><span class="s3">f&quot;</span><span class="s4">{</span><span class="s1">pool</span><span class="s4">}</span><span class="s3">: </span><span class="s4">{</span><span class="s1">message</span><span class="s4">}</span><span class="s3">&quot;</span><span class="s1">)</span>
+
+    <span class="s0">def </span><span class="s1">__reduce__(self) -&gt; _TYPE_REDUCE_RESULT:</span>
+        <span class="s2"># For pickling purposes.</span>
+        <span class="s0">return </span><span class="s1">self.__class__, (</span><span class="s0">None</span><span class="s1">, self._message)</span>
+
+
+<span class="s0">class </span><span class="s1">RequestError(PoolError):</span>
+    <span class="s2">&quot;&quot;&quot;Base exception for PoolErrors that have associated URLs.&quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">__init__(self, pool: ConnectionPool, url: str | </span><span class="s0">None</span><span class="s1">, message: str) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">self.url = url</span>
+        <span class="s1">super().__init__(pool, message)</span>
+
+    <span class="s0">def </span><span class="s1">__reduce__(self) -&gt; _TYPE_REDUCE_RESULT:</span>
+        <span class="s2"># For pickling purposes.</span>
+        <span class="s0">return </span><span class="s1">self.__class__, (</span><span class="s0">None</span><span class="s1">, self.url, self._message)</span>
+
+
+<span class="s0">class </span><span class="s1">SSLError(HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when SSL certificate fails in an HTTPS connection.&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">ProxyError(HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when the connection to a proxy fails.&quot;&quot;&quot;</span>
+
+    <span class="s2"># The original error is also available as __cause__.</span>
+    <span class="s1">original_error: Exception</span>
+
+    <span class="s0">def </span><span class="s1">__init__(self, message: str, error: Exception) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">super().__init__(message, error)</span>
+        <span class="s1">self.original_error = error</span>
+
+
+<span class="s0">class </span><span class="s1">DecodeError(HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when automatic decoding based on Content-Type fails.&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">ProtocolError(HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when something unexpected happens mid-request/response.&quot;&quot;&quot;</span>
+
+
+<span class="s2">#: Renamed to ProtocolError but aliased for backwards compatibility.</span>
+<span class="s1">ConnectionError = ProtocolError</span>
+
+
+<span class="s2"># Leaf Exceptions</span>
+
+
+<span class="s0">class </span><span class="s1">MaxRetryError(RequestError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when the maximum number of retries is exceeded. 
+ 
+    :param pool: The connection pool 
+    :type pool: :class:`~urllib3.connectionpool.HTTPConnectionPool` 
+    :param str url: The requested Url 
+    :param reason: The underlying error 
+    :type reason: :class:`Exception` 
+ 
+    &quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">__init__(</span>
+        <span class="s1">self, pool: ConnectionPool, url: str | </span><span class="s0">None</span><span class="s1">, reason: Exception | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span>
+    <span class="s1">) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">self.reason = reason</span>
+
+        <span class="s1">message = </span><span class="s3">f&quot;Max retries exceeded with url: </span><span class="s4">{</span><span class="s1">url</span><span class="s4">} </span><span class="s3">(Caused by </span><span class="s4">{</span><span class="s1">reason</span><span class="s4">!r}</span><span class="s3">)&quot;</span>
+
+        <span class="s1">super().__init__(pool, url, message)</span>
+
+    <span class="s0">def </span><span class="s1">__reduce__(self) -&gt; _TYPE_REDUCE_RESULT:</span>
+        <span class="s2"># For pickling purposes.</span>
+        <span class="s0">return </span><span class="s1">self.__class__, (</span><span class="s0">None</span><span class="s1">, self.url, self.reason)</span>
+
+
+<span class="s0">class </span><span class="s1">HostChangedError(RequestError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when an existing pool gets a request for a foreign host.&quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">__init__(</span>
+        <span class="s1">self, pool: ConnectionPool, url: str, retries: Retry | int = </span><span class="s5">3</span>
+    <span class="s1">) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">message = </span><span class="s3">f&quot;Tried to open a foreign host with url: </span><span class="s4">{</span><span class="s1">url</span><span class="s4">}</span><span class="s3">&quot;</span>
+        <span class="s1">super().__init__(pool, url, message)</span>
+        <span class="s1">self.retries = retries</span>
+
+
+<span class="s0">class </span><span class="s1">TimeoutStateError(HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when passing an invalid state to a timeout&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">TimeoutError(HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when a socket timeout error occurs. 
+ 
+    Catching this error will catch both :exc:`ReadTimeoutErrors 
+    &lt;ReadTimeoutError&gt;` and :exc:`ConnectTimeoutErrors &lt;ConnectTimeoutError&gt;`. 
+    &quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">ReadTimeoutError(TimeoutError, RequestError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when a socket timeout occurs while receiving data from a server&quot;&quot;&quot;</span>
+
+
+<span class="s2"># This timeout error does not have a URL attached and needs to inherit from the</span>
+<span class="s2"># base HTTPError</span>
+<span class="s0">class </span><span class="s1">ConnectTimeoutError(TimeoutError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when a socket timeout occurs while connecting to a server&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">NewConnectionError(ConnectTimeoutError, HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when we fail to establish a new connection. Usually ECONNREFUSED.&quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">__init__(self, conn: HTTPConnection, message: str) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">self.conn = conn</span>
+        <span class="s1">self._message = message</span>
+        <span class="s1">super().__init__(</span><span class="s3">f&quot;</span><span class="s4">{</span><span class="s1">conn</span><span class="s4">}</span><span class="s3">: </span><span class="s4">{</span><span class="s1">message</span><span class="s4">}</span><span class="s3">&quot;</span><span class="s1">)</span>
+
+    <span class="s0">def </span><span class="s1">__reduce__(self) -&gt; _TYPE_REDUCE_RESULT:</span>
+        <span class="s2"># For pickling purposes.</span>
+        <span class="s0">return </span><span class="s1">self.__class__, (</span><span class="s0">None</span><span class="s1">, self._message)</span>
+
+    <span class="s1">@property</span>
+    <span class="s0">def </span><span class="s1">pool(self) -&gt; HTTPConnection:</span>
+        <span class="s1">warnings.warn(</span>
+            <span class="s3">&quot;The 'pool' property is deprecated and will be removed &quot;</span>
+            <span class="s3">&quot;in urllib3 v3.0. Use 'conn' instead.&quot;</span><span class="s1">,</span>
+            <span class="s1">FutureWarning,</span>
+            <span class="s1">stacklevel=</span><span class="s5">2</span><span class="s1">,</span>
+        <span class="s1">)</span>
+
+        <span class="s0">return </span><span class="s1">self.conn</span>
+
+
+<span class="s0">class </span><span class="s1">NameResolutionError(NewConnectionError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when host name resolution fails.&quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">__init__(self, host: str, conn: HTTPConnection, reason: socket.gaierror):</span>
+        <span class="s1">message = </span><span class="s3">f&quot;Failed to resolve '</span><span class="s4">{</span><span class="s1">host</span><span class="s4">}</span><span class="s3">' (</span><span class="s4">{</span><span class="s1">reason</span><span class="s4">}</span><span class="s3">)&quot;</span>
+        <span class="s1">self._host = host</span>
+        <span class="s1">self._reason = reason</span>
+        <span class="s1">super().__init__(conn, message)</span>
+
+    <span class="s0">def </span><span class="s1">__reduce__(self) -&gt; _TYPE_REDUCE_RESULT:</span>
+        <span class="s2"># For pickling purposes.</span>
+        <span class="s0">return </span><span class="s1">self.__class__, (self._host, </span><span class="s0">None</span><span class="s1">, self._reason)</span>
+
+
+<span class="s0">class </span><span class="s1">EmptyPoolError(PoolError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when a pool runs out of connections and no more are allowed.&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">FullPoolError(PoolError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when we try to add a connection to a full pool in blocking mode.&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">ClosedPoolError(PoolError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when a request enters a pool after the pool has been closed.&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">LocationValueError(ValueError, HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when there is something wrong with a given URL input.&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">LocationParseError(LocationValueError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when get_host or similar fails to parse the URL input.&quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">__init__(self, location: str) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">message = </span><span class="s3">f&quot;Failed to parse: </span><span class="s4">{</span><span class="s1">location</span><span class="s4">}</span><span class="s3">&quot;</span>
+        <span class="s1">super().__init__(message)</span>
+
+        <span class="s1">self.location = location</span>
+
+
+<span class="s0">class </span><span class="s1">URLSchemeUnknown(LocationValueError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised when a URL input has an unsupported scheme.&quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">__init__(self, scheme: str):</span>
+        <span class="s1">message = </span><span class="s3">f&quot;Not supported URL scheme </span><span class="s4">{</span><span class="s1">scheme</span><span class="s4">}</span><span class="s3">&quot;</span>
+        <span class="s1">super().__init__(message)</span>
+
+        <span class="s1">self.scheme = scheme</span>
+
+
+<span class="s0">class </span><span class="s1">ResponseError(HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot;Used as a container for an error reason supplied in a MaxRetryError.&quot;&quot;&quot;</span>
+
+    <span class="s1">GENERIC_ERROR = </span><span class="s3">&quot;too many error responses&quot;</span>
+    <span class="s1">SPECIFIC_ERROR = </span><span class="s3">&quot;too many {status_code} error responses&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">SecurityWarning(HTTPWarning):</span>
+    <span class="s2">&quot;&quot;&quot;Warned when performing security reducing actions&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">InsecureRequestWarning(SecurityWarning):</span>
+    <span class="s2">&quot;&quot;&quot;Warned when making an unverified HTTPS request.&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">NotOpenSSLWarning(SecurityWarning):</span>
+    <span class="s2">&quot;&quot;&quot;Warned when using unsupported SSL library&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">SystemTimeWarning(SecurityWarning):</span>
+    <span class="s2">&quot;&quot;&quot;Warned when system time is suspected to be wrong&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">InsecurePlatformWarning(SecurityWarning):</span>
+    <span class="s2">&quot;&quot;&quot;Warned when certain TLS/SSL configuration is not available on a platform.&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">DependencyWarning(HTTPWarning):</span>
+    <span class="s2">&quot;&quot;&quot; 
+    Warned when an attempt is made to import a module with missing optional 
+    dependencies. 
+    &quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">ResponseNotChunked(ProtocolError, ValueError):</span>
+    <span class="s2">&quot;&quot;&quot;Response needs to be chunked in order to read it as chunks.&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">BodyNotHttplibCompatible(HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot; 
+    Body should be :class:`http.client.HTTPResponse` like 
+    (have an fp attribute which returns raw chunks) for read_chunked(). 
+    &quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">IncompleteRead(HTTPError, httplib_IncompleteRead):</span>
+    <span class="s2">&quot;&quot;&quot; 
+    Response length doesn't match expected Content-Length 
+ 
+    Subclass of :class:`http.client.IncompleteRead` to allow int value 
+    for ``partial`` to avoid creating large objects on streamed reads. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s1">partial: int  </span><span class="s2"># type: ignore[assignment]</span>
+    <span class="s1">expected: int</span>
+
+    <span class="s0">def </span><span class="s1">__init__(self, partial: int, expected: int) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">self.partial = partial</span>
+        <span class="s1">self.expected = expected</span>
+
+    <span class="s0">def </span><span class="s1">__repr__(self) -&gt; str:</span>
+        <span class="s0">return </span><span class="s3">&quot;IncompleteRead(%i bytes read, %i more expected)&quot; </span><span class="s1">% (</span>
+            <span class="s1">self.partial,</span>
+            <span class="s1">self.expected,</span>
+        <span class="s1">)</span>
+
+
+<span class="s0">class </span><span class="s1">InvalidChunkLength(HTTPError, httplib_IncompleteRead):</span>
+    <span class="s2">&quot;&quot;&quot;Invalid chunk length in a chunked response.&quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">__init__(self, response: HTTPResponse, length: bytes) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">self.partial: int = response.tell()  </span><span class="s2"># type: ignore[assignment]</span>
+        <span class="s1">self.expected: int | </span><span class="s0">None </span><span class="s1">= response.length_remaining</span>
+        <span class="s1">self.response = response</span>
+        <span class="s1">self.length = length</span>
+
+    <span class="s0">def </span><span class="s1">__repr__(self) -&gt; str:</span>
+        <span class="s0">return </span><span class="s3">&quot;InvalidChunkLength(got length %r, %i bytes read)&quot; </span><span class="s1">% (</span>
+            <span class="s1">self.length,</span>
+            <span class="s1">self.partial,</span>
+        <span class="s1">)</span>
+
+
+<span class="s0">class </span><span class="s1">InvalidHeader(HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot;The header provided was somehow invalid.&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">ProxySchemeUnknown(AssertionError, URLSchemeUnknown):</span>
+    <span class="s2">&quot;&quot;&quot;ProxyManager does not support the supplied scheme&quot;&quot;&quot;</span>
+
+    <span class="s2"># TODO(t-8ch): Stop inheriting from AssertionError in v2.0.</span>
+
+    <span class="s0">def </span><span class="s1">__init__(self, scheme: str | </span><span class="s0">None</span><span class="s1">) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s2"># 'localhost' is here because our URL parser parses</span>
+        <span class="s2"># localhost:8080 -&gt; scheme=localhost, remove if we fix this.</span>
+        <span class="s0">if </span><span class="s1">scheme == </span><span class="s3">&quot;localhost&quot;</span><span class="s1">:</span>
+            <span class="s1">scheme = </span><span class="s0">None</span>
+        <span class="s0">if </span><span class="s1">scheme </span><span class="s0">is None</span><span class="s1">:</span>
+            <span class="s1">message = </span><span class="s3">&quot;Proxy URL had no scheme, should start with http:// or https://&quot;</span>
+        <span class="s0">else</span><span class="s1">:</span>
+            <span class="s1">message = </span><span class="s3">f&quot;Proxy URL had unsupported scheme </span><span class="s4">{</span><span class="s1">scheme</span><span class="s4">}</span><span class="s3">, should use http:// or https://&quot;</span>
+        <span class="s1">super().__init__(message)</span>
+
+
+<span class="s0">class </span><span class="s1">ProxySchemeUnsupported(ValueError):</span>
+    <span class="s2">&quot;&quot;&quot;Fetching HTTPS resources through HTTPS proxies is unsupported&quot;&quot;&quot;</span>
+
+
+<span class="s0">class </span><span class="s1">HeaderParsingError(HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot;Raised by assert_header_parsing, but we convert it to a log.warning statement.&quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">__init__(</span>
+        <span class="s1">self, defects: list[MessageDefect], unparsed_data: bytes | str | </span><span class="s0">None</span>
+    <span class="s1">) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">message = </span><span class="s3">f&quot;</span><span class="s4">{</span><span class="s1">defects </span><span class="s0">or </span><span class="s3">'Unknown'</span><span class="s4">}</span><span class="s3">, unparsed data: </span><span class="s4">{</span><span class="s1">unparsed_data</span><span class="s4">!r}</span><span class="s3">&quot;</span>
+        <span class="s1">super().__init__(message)</span>
+
+
+<span class="s0">class </span><span class="s1">UnrewindableBodyError(HTTPError):</span>
+    <span class="s2">&quot;&quot;&quot;urllib3 encountered an error when trying to rewind a body&quot;&quot;&quot;</span>
+</pre>
+</body>
+</html>

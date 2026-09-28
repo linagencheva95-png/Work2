@@ -1,0 +1,508 @@
+<html>
+<head>
+<title>_collections.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #0033b3;}
+.s1 { color: #080808;}
+.s2 { color: #8c8c8c; font-style: italic;}
+.s3 { color: #067d17;}
+.s4 { color: #1750eb;}
+.s5 { color: #0037a6;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+_collections.py</font>
+</center></td></tr></table>
+<pre><span class="s0">from </span><span class="s1">__future__ </span><span class="s0">import </span><span class="s1">annotations</span>
+
+<span class="s0">import </span><span class="s1">typing</span>
+<span class="s0">from </span><span class="s1">collections </span><span class="s0">import </span><span class="s1">OrderedDict</span>
+<span class="s0">from </span><span class="s1">enum </span><span class="s0">import </span><span class="s1">Enum, auto</span>
+<span class="s0">from </span><span class="s1">threading </span><span class="s0">import </span><span class="s1">RLock</span>
+
+<span class="s0">if </span><span class="s1">typing.TYPE_CHECKING:</span>
+    <span class="s2"># We can only import Protocol if TYPE_CHECKING because it's a development</span>
+    <span class="s2"># dependency, and is not available at runtime.</span>
+    <span class="s0">from </span><span class="s1">typing </span><span class="s0">import </span><span class="s1">Protocol</span>
+
+    <span class="s0">from </span><span class="s1">typing_extensions </span><span class="s0">import </span><span class="s1">Self</span>
+
+    <span class="s0">class </span><span class="s1">HasGettableStringKeys(Protocol):</span>
+        <span class="s0">def </span><span class="s1">keys(self) -&gt; typing.Iterator[str]: ...</span>
+
+        <span class="s0">def </span><span class="s1">__getitem__(self, key: str) -&gt; str: ...</span>
+
+
+<span class="s1">__all__ = [</span><span class="s3">&quot;RecentlyUsedContainer&quot;</span><span class="s1">, </span><span class="s3">&quot;HTTPHeaderDict&quot;</span><span class="s1">]</span>
+
+
+<span class="s2"># Key type</span>
+<span class="s1">_KT = typing.TypeVar(</span><span class="s3">&quot;_KT&quot;</span><span class="s1">)</span>
+<span class="s2"># Value type</span>
+<span class="s1">_VT = typing.TypeVar(</span><span class="s3">&quot;_VT&quot;</span><span class="s1">)</span>
+<span class="s2"># Default type</span>
+<span class="s1">_DT = typing.TypeVar(</span><span class="s3">&quot;_DT&quot;</span><span class="s1">)</span>
+
+<span class="s1">ValidHTTPHeaderSource = typing.Union[</span>
+    <span class="s3">&quot;HTTPHeaderDict&quot;</span><span class="s1">,</span>
+    <span class="s1">typing.Mapping[str, str],</span>
+    <span class="s1">typing.Iterable[tuple[str, str]],</span>
+    <span class="s3">&quot;HasGettableStringKeys&quot;</span><span class="s1">,</span>
+<span class="s1">]</span>
+
+
+<span class="s0">class </span><span class="s1">_Sentinel(Enum):</span>
+    <span class="s1">not_passed = auto()</span>
+
+
+<span class="s0">def </span><span class="s1">ensure_can_construct_http_header_dict(</span>
+    <span class="s1">potential: object,</span>
+<span class="s1">) -&gt; ValidHTTPHeaderSource | </span><span class="s0">None</span><span class="s1">:</span>
+    <span class="s0">if </span><span class="s1">isinstance(potential, HTTPHeaderDict):</span>
+        <span class="s0">return </span><span class="s1">potential</span>
+    <span class="s0">elif </span><span class="s1">isinstance(potential, typing.Mapping):</span>
+        <span class="s2"># Full runtime checking of the contents of a Mapping is expensive, so for the</span>
+        <span class="s2"># purposes of typechecking, we assume that any Mapping is the right shape.</span>
+        <span class="s0">return </span><span class="s1">typing.cast(typing.Mapping[str, str], potential)</span>
+    <span class="s0">elif </span><span class="s1">isinstance(potential, typing.Iterable):</span>
+        <span class="s2"># Similarly to Mapping, full runtime checking of the contents of an Iterable is</span>
+        <span class="s2"># expensive, so for the purposes of typechecking, we assume that any Iterable</span>
+        <span class="s2"># is the right shape.</span>
+        <span class="s0">return </span><span class="s1">typing.cast(typing.Iterable[tuple[str, str]], potential)</span>
+    <span class="s0">elif </span><span class="s1">hasattr(potential, </span><span class="s3">&quot;keys&quot;</span><span class="s1">) </span><span class="s0">and </span><span class="s1">hasattr(potential, </span><span class="s3">&quot;__getitem__&quot;</span><span class="s1">):</span>
+        <span class="s0">return </span><span class="s1">typing.cast(</span><span class="s3">&quot;HasGettableStringKeys&quot;</span><span class="s1">, potential)</span>
+    <span class="s0">else</span><span class="s1">:</span>
+        <span class="s0">return None</span>
+
+
+<span class="s0">class </span><span class="s1">RecentlyUsedContainer(typing.Generic[_KT, _VT], typing.MutableMapping[_KT, _VT]):</span>
+    <span class="s2">&quot;&quot;&quot; 
+    Provides a thread-safe dict-like container which maintains up to 
+    ``maxsize`` keys while throwing away the least-recently-used keys beyond 
+    ``maxsize``. 
+ 
+    :param maxsize: 
+        Maximum number of recent elements to retain. 
+ 
+    :param dispose_func: 
+        Every time an item is evicted from the container, 
+        ``dispose_func(value)`` is called.  Callback which will get called 
+    &quot;&quot;&quot;</span>
+
+    <span class="s1">_container: typing.OrderedDict[_KT, _VT]</span>
+    <span class="s1">_maxsize: int</span>
+    <span class="s1">dispose_func: typing.Callable[[_VT], </span><span class="s0">None</span><span class="s1">] | </span><span class="s0">None</span>
+    <span class="s1">lock: RLock</span>
+
+    <span class="s0">def </span><span class="s1">__init__(</span>
+        <span class="s1">self,</span>
+        <span class="s1">maxsize: int = </span><span class="s4">10</span><span class="s1">,</span>
+        <span class="s1">dispose_func: typing.Callable[[_VT], </span><span class="s0">None</span><span class="s1">] | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+    <span class="s1">) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">super().__init__()</span>
+        <span class="s1">self._maxsize = maxsize</span>
+        <span class="s1">self.dispose_func = dispose_func</span>
+        <span class="s1">self._container = OrderedDict()</span>
+        <span class="s1">self.lock = RLock()</span>
+
+    <span class="s0">def </span><span class="s1">__getitem__(self, key: _KT) -&gt; _VT:</span>
+        <span class="s2"># Re-insert the item, moving it to the end of the eviction line.</span>
+        <span class="s0">with </span><span class="s1">self.lock:</span>
+            <span class="s1">item = self._container.pop(key)</span>
+            <span class="s1">self._container[key] = item</span>
+            <span class="s0">return </span><span class="s1">item</span>
+
+    <span class="s0">def </span><span class="s1">__setitem__(self, key: _KT, value: _VT) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">evicted_item = </span><span class="s0">None</span>
+        <span class="s0">with </span><span class="s1">self.lock:</span>
+            <span class="s2"># Possibly evict the existing value of 'key'</span>
+            <span class="s0">try</span><span class="s1">:</span>
+                <span class="s2"># If the key exists, we'll overwrite it, which won't change the</span>
+                <span class="s2"># size of the pool. Because accessing a key should move it to</span>
+                <span class="s2"># the end of the eviction line, we pop it out first.</span>
+                <span class="s1">evicted_item = key, self._container.pop(key)</span>
+                <span class="s1">self._container[key] = value</span>
+            <span class="s0">except </span><span class="s1">KeyError:</span>
+                <span class="s2"># When the key does not exist, we insert the value first so that</span>
+                <span class="s2"># evicting works in all cases, including when self._maxsize is 0</span>
+                <span class="s1">self._container[key] = value</span>
+                <span class="s0">if </span><span class="s1">len(self._container) &gt; self._maxsize:</span>
+                    <span class="s2"># If we didn't evict an existing value, and we've hit our maximum</span>
+                    <span class="s2"># size, then we have to evict the least recently used item from</span>
+                    <span class="s2"># the beginning of the container.</span>
+                    <span class="s1">evicted_item = self._container.popitem(last=</span><span class="s0">False</span><span class="s1">)</span>
+
+        <span class="s2"># After releasing the lock on the pool, dispose of any evicted value.</span>
+        <span class="s0">if </span><span class="s1">evicted_item </span><span class="s0">is not None and </span><span class="s1">self.dispose_func:</span>
+            <span class="s1">_, evicted_value = evicted_item</span>
+            <span class="s1">self.dispose_func(evicted_value)</span>
+
+    <span class="s0">def </span><span class="s1">__delitem__(self, key: _KT) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s0">with </span><span class="s1">self.lock:</span>
+            <span class="s1">value = self._container.pop(key)</span>
+
+        <span class="s0">if </span><span class="s1">self.dispose_func:</span>
+            <span class="s1">self.dispose_func(value)</span>
+
+    <span class="s0">def </span><span class="s1">__len__(self) -&gt; int:</span>
+        <span class="s0">with </span><span class="s1">self.lock:</span>
+            <span class="s0">return </span><span class="s1">len(self._container)</span>
+
+    <span class="s0">def </span><span class="s1">__iter__(self) -&gt; typing.NoReturn:</span>
+        <span class="s0">raise </span><span class="s1">NotImplementedError(</span>
+            <span class="s3">&quot;Iteration over this class is unlikely to be threadsafe.&quot;</span>
+        <span class="s1">)</span>
+
+    <span class="s0">def </span><span class="s1">clear(self) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s0">with </span><span class="s1">self.lock:</span>
+            <span class="s2"># Copy pointers to all values, then wipe the mapping</span>
+            <span class="s1">values = list(self._container.values())</span>
+            <span class="s1">self._container.clear()</span>
+
+        <span class="s0">if </span><span class="s1">self.dispose_func:</span>
+            <span class="s0">for </span><span class="s1">value </span><span class="s0">in </span><span class="s1">values:</span>
+                <span class="s1">self.dispose_func(value)</span>
+
+    <span class="s0">def </span><span class="s1">keys(self) -&gt; set[_KT]:  </span><span class="s2"># type: ignore[override]</span>
+        <span class="s0">with </span><span class="s1">self.lock:</span>
+            <span class="s0">return </span><span class="s1">set(self._container.keys())</span>
+
+
+<span class="s0">class </span><span class="s1">HTTPHeaderDictItemView(set[tuple[str, str]]):</span>
+    <span class="s2">&quot;&quot;&quot; 
+    HTTPHeaderDict is unusual for a Mapping[str, str] in that it has two modes of 
+    address. 
+ 
+    If we directly try to get an item with a particular name, we will get a string 
+    back that is the concatenated version of all the values: 
+ 
+    &gt;&gt;&gt; d['X-Header-Name'] 
+    'Value1, Value2, Value3' 
+ 
+    However, if we iterate over an HTTPHeaderDict's items, we will optionally combine 
+    these values based on whether combine=True was called when building up the dictionary 
+ 
+    &gt;&gt;&gt; d = HTTPHeaderDict({&quot;A&quot;: &quot;1&quot;, &quot;B&quot;: &quot;foo&quot;}) 
+    &gt;&gt;&gt; d.add(&quot;A&quot;, &quot;2&quot;, combine=True) 
+    &gt;&gt;&gt; d.add(&quot;B&quot;, &quot;bar&quot;) 
+    &gt;&gt;&gt; list(d.items()) 
+    [ 
+        ('A', '1, 2'), 
+        ('B', 'foo'), 
+        ('B', 'bar'), 
+    ] 
+ 
+    This class conforms to the interface required by the MutableMapping ABC while 
+    also giving us the nonstandard iteration behavior we want; items with duplicate 
+    keys, ordered by time of first insertion. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s1">_headers: HTTPHeaderDict</span>
+
+    <span class="s0">def </span><span class="s1">__init__(self, headers: HTTPHeaderDict) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">self._headers = headers</span>
+
+    <span class="s0">def </span><span class="s1">__len__(self) -&gt; int:</span>
+        <span class="s0">return </span><span class="s1">len(list(self._headers.iteritems()))</span>
+
+    <span class="s0">def </span><span class="s1">__iter__(self) -&gt; typing.Iterator[tuple[str, str]]:</span>
+        <span class="s0">return </span><span class="s1">self._headers.iteritems()</span>
+
+    <span class="s0">def </span><span class="s1">__contains__(self, item: object) -&gt; bool:</span>
+        <span class="s0">if </span><span class="s1">isinstance(item, tuple) </span><span class="s0">and </span><span class="s1">len(item) == </span><span class="s4">2</span><span class="s1">:</span>
+            <span class="s1">passed_key, passed_val = item</span>
+            <span class="s0">if </span><span class="s1">isinstance(passed_key, str) </span><span class="s0">and </span><span class="s1">isinstance(passed_val, str):</span>
+                <span class="s0">return </span><span class="s1">self._headers._has_value_for_header(passed_key, passed_val)</span>
+        <span class="s0">return False</span>
+
+
+<span class="s0">class </span><span class="s1">HTTPHeaderDict(typing.MutableMapping[str, str]):</span>
+    <span class="s2">&quot;&quot;&quot; 
+    :param headers: 
+        An iterable of field-value pairs. Must not contain multiple field names 
+        when compared case-insensitively. 
+ 
+    :param kwargs: 
+        Additional field-value pairs to pass in to ``dict.update``. 
+ 
+    A ``dict`` like container for storing HTTP Headers. 
+ 
+    Field names are stored and compared case-insensitively in compliance with 
+    RFC 7230. Iteration provides the first case-sensitive key seen for each 
+    case-insensitive pair. 
+ 
+    Using ``__setitem__`` syntax overwrites fields that compare equal 
+    case-insensitively in order to maintain ``dict``'s api. For fields that 
+    compare equal, instead create a new ``HTTPHeaderDict`` and use ``.add`` 
+    in a loop. 
+ 
+    If multiple fields that are equal case-insensitively are passed to the 
+    constructor or ``.update``, the behavior is undefined and some will be 
+    lost. 
+ 
+    &gt;&gt;&gt; headers = HTTPHeaderDict() 
+    &gt;&gt;&gt; headers.add('Set-Cookie', 'foo=bar') 
+    &gt;&gt;&gt; headers.add('set-cookie', 'baz=quxx') 
+    &gt;&gt;&gt; headers['content-length'] = '7' 
+    &gt;&gt;&gt; headers['SET-cookie'] 
+    'foo=bar, baz=quxx' 
+    &gt;&gt;&gt; headers['Content-Length'] 
+    '7' 
+    &quot;&quot;&quot;</span>
+
+    <span class="s1">_container: typing.MutableMapping[str, list[str]]</span>
+
+    <span class="s0">def </span><span class="s1">__init__(self, headers: ValidHTTPHeaderSource | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">, **kwargs: str):</span>
+        <span class="s1">super().__init__()</span>
+        <span class="s1">self._container = {}  </span><span class="s2"># 'dict' is insert-ordered</span>
+        <span class="s0">if </span><span class="s1">headers </span><span class="s0">is not None</span><span class="s1">:</span>
+            <span class="s0">if </span><span class="s1">isinstance(headers, HTTPHeaderDict):</span>
+                <span class="s1">self._copy_from(headers)</span>
+            <span class="s0">else</span><span class="s1">:</span>
+                <span class="s1">self.extend(headers)</span>
+        <span class="s0">if </span><span class="s1">kwargs:</span>
+            <span class="s1">self.extend(kwargs)</span>
+
+    <span class="s0">def </span><span class="s1">__setitem__(self, key: str, val: str) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s2"># avoid a bytes/str comparison by decoding before httplib</span>
+        <span class="s0">if </span><span class="s1">isinstance(key, bytes):</span>
+            <span class="s1">key = key.decode(</span><span class="s3">&quot;latin-1&quot;</span><span class="s1">)</span>
+        <span class="s1">self._container[key.lower()] = [key, val]</span>
+
+    <span class="s0">def </span><span class="s1">__getitem__(self, key: str) -&gt; str:</span>
+        <span class="s0">if </span><span class="s1">isinstance(key, bytes):</span>
+            <span class="s1">key = key.decode(</span><span class="s3">&quot;latin-1&quot;</span><span class="s1">)</span>
+        <span class="s1">val = self._container[key.lower()]</span>
+        <span class="s0">return </span><span class="s3">&quot;, &quot;</span><span class="s1">.join(val[</span><span class="s4">1</span><span class="s1">:])</span>
+
+    <span class="s0">def </span><span class="s1">__delitem__(self, key: str) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s0">if </span><span class="s1">isinstance(key, bytes):</span>
+            <span class="s1">key = key.decode(</span><span class="s3">&quot;latin-1&quot;</span><span class="s1">)</span>
+        <span class="s0">del </span><span class="s1">self._container[key.lower()]</span>
+
+    <span class="s0">def </span><span class="s1">__contains__(self, key: object) -&gt; bool:</span>
+        <span class="s0">if </span><span class="s1">isinstance(key, bytes):</span>
+            <span class="s1">key = key.decode(</span><span class="s3">&quot;latin-1&quot;</span><span class="s1">)</span>
+        <span class="s0">if </span><span class="s1">isinstance(key, str):</span>
+            <span class="s0">return </span><span class="s1">key.lower() </span><span class="s0">in </span><span class="s1">self._container</span>
+        <span class="s0">return False</span>
+
+    <span class="s0">def </span><span class="s1">setdefault(self, key: str, default: str = </span><span class="s3">&quot;&quot;</span><span class="s1">) -&gt; str:</span>
+        <span class="s0">return </span><span class="s1">super().setdefault(key, default)</span>
+
+    <span class="s0">def </span><span class="s1">__eq__(self, other: object) -&gt; bool:</span>
+        <span class="s1">maybe_constructable = ensure_can_construct_http_header_dict(other)</span>
+        <span class="s0">if </span><span class="s1">maybe_constructable </span><span class="s0">is None</span><span class="s1">:</span>
+            <span class="s0">return False</span>
+        <span class="s0">else</span><span class="s1">:</span>
+            <span class="s1">other_as_http_header_dict = type(self)(maybe_constructable)</span>
+
+        <span class="s0">return </span><span class="s1">{k.lower(): v </span><span class="s0">for </span><span class="s1">k, v </span><span class="s0">in </span><span class="s1">self.itermerged()} == {</span>
+            <span class="s1">k.lower(): v </span><span class="s0">for </span><span class="s1">k, v </span><span class="s0">in </span><span class="s1">other_as_http_header_dict.itermerged()</span>
+        <span class="s1">}</span>
+
+    <span class="s0">def </span><span class="s1">__ne__(self, other: object) -&gt; bool:</span>
+        <span class="s0">return not </span><span class="s1">self.__eq__(other)</span>
+
+    <span class="s0">def </span><span class="s1">__len__(self) -&gt; int:</span>
+        <span class="s0">return </span><span class="s1">len(self._container)</span>
+
+    <span class="s0">def </span><span class="s1">__iter__(self) -&gt; typing.Iterator[str]:</span>
+        <span class="s2"># Only provide the originally cased names</span>
+        <span class="s0">for </span><span class="s1">vals </span><span class="s0">in </span><span class="s1">self._container.values():</span>
+            <span class="s0">yield </span><span class="s1">vals[</span><span class="s4">0</span><span class="s1">]</span>
+
+    <span class="s0">def </span><span class="s1">discard(self, key: str) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s0">try</span><span class="s1">:</span>
+            <span class="s0">del </span><span class="s1">self[key]</span>
+        <span class="s0">except </span><span class="s1">KeyError:</span>
+            <span class="s0">pass</span>
+
+    <span class="s0">def </span><span class="s1">add(self, key: str, val: str, *, combine: bool = </span><span class="s0">False</span><span class="s1">) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s2">&quot;&quot;&quot;Adds a (name, value) pair, doesn't overwrite the value if it already 
+        exists. 
+ 
+        If this is called with combine=True, instead of adding a new header value 
+        as a distinct item during iteration, this will instead append the value to 
+        any existing header value with a comma. If no existing header value exists 
+        for the key, then the value will simply be added, ignoring the combine parameter. 
+ 
+        &gt;&gt;&gt; headers = HTTPHeaderDict(foo='bar') 
+        &gt;&gt;&gt; headers.add('Foo', 'baz') 
+        &gt;&gt;&gt; headers['foo'] 
+        'bar, baz' 
+        &gt;&gt;&gt; list(headers.items()) 
+        [('foo', 'bar'), ('foo', 'baz')] 
+        &gt;&gt;&gt; headers.add('foo', 'quz', combine=True) 
+        &gt;&gt;&gt; list(headers.items()) 
+        [('foo', 'bar, baz, quz')] 
+        &quot;&quot;&quot;</span>
+        <span class="s2"># avoid a bytes/str comparison by decoding before httplib</span>
+        <span class="s0">if </span><span class="s1">isinstance(key, bytes):</span>
+            <span class="s1">key = key.decode(</span><span class="s3">&quot;latin-1&quot;</span><span class="s1">)</span>
+        <span class="s1">key_lower = key.lower()</span>
+        <span class="s1">new_vals = [key, val]</span>
+        <span class="s2"># Keep the common case aka no item present as fast as possible</span>
+        <span class="s1">vals = self._container.setdefault(key_lower, new_vals)</span>
+        <span class="s0">if </span><span class="s1">new_vals </span><span class="s0">is not </span><span class="s1">vals:</span>
+            <span class="s2"># if there are values here, then there is at least the initial</span>
+            <span class="s2"># key/value pair</span>
+            <span class="s0">assert </span><span class="s1">len(vals) &gt;= </span><span class="s4">2</span>
+            <span class="s0">if </span><span class="s1">combine:</span>
+                <span class="s1">vals[-</span><span class="s4">1</span><span class="s1">] = vals[-</span><span class="s4">1</span><span class="s1">] + </span><span class="s3">&quot;, &quot; </span><span class="s1">+ val</span>
+            <span class="s0">else</span><span class="s1">:</span>
+                <span class="s1">vals.append(val)</span>
+
+    <span class="s0">def </span><span class="s1">extend(self, *args: ValidHTTPHeaderSource, **kwargs: str) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s2">&quot;&quot;&quot;Generic import function for any type of header-like object. 
+        Adapted version of MutableMapping.update in order to insert items 
+        with self.add instead of self.__setitem__ 
+        &quot;&quot;&quot;</span>
+        <span class="s0">if </span><span class="s1">len(args) &gt; </span><span class="s4">1</span><span class="s1">:</span>
+            <span class="s0">raise </span><span class="s1">TypeError(</span>
+                <span class="s3">f&quot;extend() takes at most 1 positional arguments (</span><span class="s5">{</span><span class="s1">len(args)</span><span class="s5">} </span><span class="s3">given)&quot;</span>
+            <span class="s1">)</span>
+        <span class="s1">other = args[</span><span class="s4">0</span><span class="s1">] </span><span class="s0">if </span><span class="s1">len(args) &gt;= </span><span class="s4">1 </span><span class="s0">else </span><span class="s1">()</span>
+
+        <span class="s0">if </span><span class="s1">isinstance(other, HTTPHeaderDict):</span>
+            <span class="s0">for </span><span class="s1">key, val </span><span class="s0">in </span><span class="s1">other.iteritems():</span>
+                <span class="s1">self.add(key, val)</span>
+        <span class="s0">elif </span><span class="s1">isinstance(other, typing.Mapping):</span>
+            <span class="s0">for </span><span class="s1">key, val </span><span class="s0">in </span><span class="s1">other.items():</span>
+                <span class="s1">self.add(key, val)</span>
+        <span class="s0">elif </span><span class="s1">isinstance(other, typing.Iterable):</span>
+            <span class="s0">for </span><span class="s1">key, value </span><span class="s0">in </span><span class="s1">other:</span>
+                <span class="s1">self.add(key, value)</span>
+        <span class="s0">elif </span><span class="s1">hasattr(other, </span><span class="s3">&quot;keys&quot;</span><span class="s1">) </span><span class="s0">and </span><span class="s1">hasattr(other, </span><span class="s3">&quot;__getitem__&quot;</span><span class="s1">):</span>
+            <span class="s2"># THIS IS NOT A TYPESAFE BRANCH</span>
+            <span class="s2"># In this branch, the object has a `keys` attr but is not a Mapping or any of</span>
+            <span class="s2"># the other types indicated in the method signature. We do some stuff with</span>
+            <span class="s2"># it as though it partially implements the Mapping interface, but we're not</span>
+            <span class="s2"># doing that stuff safely AT ALL.</span>
+            <span class="s0">for </span><span class="s1">key </span><span class="s0">in </span><span class="s1">other.keys():</span>
+                <span class="s1">self.add(key, other[key])</span>
+
+        <span class="s0">for </span><span class="s1">key, value </span><span class="s0">in </span><span class="s1">kwargs.items():</span>
+            <span class="s1">self.add(key, value)</span>
+
+    <span class="s1">@typing.overload</span>
+    <span class="s0">def </span><span class="s1">getlist(self, key: str) -&gt; list[str]: ...</span>
+
+    <span class="s1">@typing.overload</span>
+    <span class="s0">def </span><span class="s1">getlist(self, key: str, default: _DT) -&gt; list[str] | _DT: ...</span>
+
+    <span class="s0">def </span><span class="s1">getlist(</span>
+        <span class="s1">self, key: str, default: _Sentinel | _DT = _Sentinel.not_passed</span>
+    <span class="s1">) -&gt; list[str] | _DT:</span>
+        <span class="s2">&quot;&quot;&quot;Returns a list of all the values for the named field. Returns an 
+        empty list if the key doesn't exist.&quot;&quot;&quot;</span>
+        <span class="s0">if </span><span class="s1">isinstance(key, bytes):</span>
+            <span class="s1">key = key.decode(</span><span class="s3">&quot;latin-1&quot;</span><span class="s1">)</span>
+        <span class="s0">try</span><span class="s1">:</span>
+            <span class="s1">vals = self._container[key.lower()]</span>
+        <span class="s0">except </span><span class="s1">KeyError:</span>
+            <span class="s0">if </span><span class="s1">default </span><span class="s0">is </span><span class="s1">_Sentinel.not_passed:</span>
+                <span class="s2"># _DT is unbound; empty list is instance of List[str]</span>
+                <span class="s0">return </span><span class="s1">[]</span>
+            <span class="s2"># _DT is bound; default is instance of _DT</span>
+            <span class="s0">return </span><span class="s1">default</span>
+        <span class="s0">else</span><span class="s1">:</span>
+            <span class="s2"># _DT may or may not be bound; vals[1:] is instance of List[str], which</span>
+            <span class="s2"># meets our external interface requirement of `Union[List[str], _DT]`.</span>
+            <span class="s0">return </span><span class="s1">vals[</span><span class="s4">1</span><span class="s1">:]</span>
+
+    <span class="s0">def </span><span class="s1">_prepare_for_method_change(self) -&gt; Self:</span>
+        <span class="s2">&quot;&quot;&quot; 
+        Remove content-specific header fields before changing the request 
+        method to GET or HEAD according to RFC 9110, Section 15.4. 
+        &quot;&quot;&quot;</span>
+        <span class="s1">content_specific_headers = [</span>
+            <span class="s3">&quot;Content-Encoding&quot;</span><span class="s1">,</span>
+            <span class="s3">&quot;Content-Language&quot;</span><span class="s1">,</span>
+            <span class="s3">&quot;Content-Location&quot;</span><span class="s1">,</span>
+            <span class="s3">&quot;Content-Type&quot;</span><span class="s1">,</span>
+            <span class="s3">&quot;Content-Length&quot;</span><span class="s1">,</span>
+            <span class="s3">&quot;Digest&quot;</span><span class="s1">,</span>
+            <span class="s3">&quot;Last-Modified&quot;</span><span class="s1">,</span>
+        <span class="s1">]</span>
+        <span class="s0">for </span><span class="s1">header </span><span class="s0">in </span><span class="s1">content_specific_headers:</span>
+            <span class="s1">self.discard(header)</span>
+        <span class="s0">return </span><span class="s1">self</span>
+
+    <span class="s2"># Backwards compatibility for httplib</span>
+    <span class="s1">getheaders = getlist</span>
+    <span class="s1">getallmatchingheaders = getlist</span>
+    <span class="s1">iget = getlist</span>
+
+    <span class="s2"># Backwards compatibility for http.cookiejar</span>
+    <span class="s1">get_all = getlist</span>
+
+    <span class="s0">def </span><span class="s1">__repr__(self) -&gt; str:</span>
+        <span class="s0">return </span><span class="s3">f&quot;</span><span class="s5">{</span><span class="s1">type(self).__name__</span><span class="s5">}</span><span class="s3">(</span><span class="s5">{</span><span class="s1">dict(self.itermerged())</span><span class="s5">}</span><span class="s3">)&quot;</span>
+
+    <span class="s0">def </span><span class="s1">_copy_from(self, other: HTTPHeaderDict) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s0">for </span><span class="s1">key </span><span class="s0">in </span><span class="s1">other:</span>
+            <span class="s1">val = other.getlist(key)</span>
+            <span class="s1">self._container[key.lower()] = [key, *val]</span>
+
+    <span class="s0">def </span><span class="s1">copy(self) -&gt; Self:</span>
+        <span class="s1">clone = type(self)()</span>
+        <span class="s1">clone._copy_from(self)</span>
+        <span class="s0">return </span><span class="s1">clone</span>
+
+    <span class="s0">def </span><span class="s1">iteritems(self) -&gt; typing.Iterator[tuple[str, str]]:</span>
+        <span class="s2">&quot;&quot;&quot;Iterate over all header lines, including duplicate ones.&quot;&quot;&quot;</span>
+        <span class="s0">for </span><span class="s1">key </span><span class="s0">in </span><span class="s1">self:</span>
+            <span class="s1">vals = self._container[key.lower()]</span>
+            <span class="s0">for </span><span class="s1">val </span><span class="s0">in </span><span class="s1">vals[</span><span class="s4">1</span><span class="s1">:]:</span>
+                <span class="s0">yield </span><span class="s1">vals[</span><span class="s4">0</span><span class="s1">], val</span>
+
+    <span class="s0">def </span><span class="s1">itermerged(self) -&gt; typing.Iterator[tuple[str, str]]:</span>
+        <span class="s2">&quot;&quot;&quot;Iterate over all headers, merging duplicate ones together.&quot;&quot;&quot;</span>
+        <span class="s0">for </span><span class="s1">key </span><span class="s0">in </span><span class="s1">self:</span>
+            <span class="s1">val = self._container[key.lower()]</span>
+            <span class="s0">yield </span><span class="s1">val[</span><span class="s4">0</span><span class="s1">], </span><span class="s3">&quot;, &quot;</span><span class="s1">.join(val[</span><span class="s4">1</span><span class="s1">:])</span>
+
+    <span class="s0">def </span><span class="s1">items(self) -&gt; HTTPHeaderDictItemView:  </span><span class="s2"># type: ignore[override]</span>
+        <span class="s0">return </span><span class="s1">HTTPHeaderDictItemView(self)</span>
+
+    <span class="s0">def </span><span class="s1">_has_value_for_header(self, header_name: str, potential_value: str) -&gt; bool:</span>
+        <span class="s0">if </span><span class="s1">header_name </span><span class="s0">in </span><span class="s1">self:</span>
+            <span class="s0">return </span><span class="s1">potential_value </span><span class="s0">in </span><span class="s1">self._container[header_name.lower()][</span><span class="s4">1</span><span class="s1">:]</span>
+        <span class="s0">return False</span>
+
+    <span class="s0">def </span><span class="s1">__ior__(self, other: object) -&gt; HTTPHeaderDict:</span>
+        <span class="s2"># Supports extending a header dict in-place using operator |=</span>
+        <span class="s2"># combining items with add instead of __setitem__</span>
+        <span class="s1">maybe_constructable = ensure_can_construct_http_header_dict(other)</span>
+        <span class="s0">if </span><span class="s1">maybe_constructable </span><span class="s0">is None</span><span class="s1">:</span>
+            <span class="s0">return </span><span class="s1">NotImplemented</span>
+        <span class="s1">self.extend(maybe_constructable)</span>
+        <span class="s0">return </span><span class="s1">self</span>
+
+    <span class="s0">def </span><span class="s1">__or__(self, other: object) -&gt; Self:</span>
+        <span class="s2"># Supports merging header dicts using operator |</span>
+        <span class="s2"># combining items with add instead of __setitem__</span>
+        <span class="s1">maybe_constructable = ensure_can_construct_http_header_dict(other)</span>
+        <span class="s0">if </span><span class="s1">maybe_constructable </span><span class="s0">is None</span><span class="s1">:</span>
+            <span class="s0">return </span><span class="s1">NotImplemented</span>
+        <span class="s1">result = self.copy()</span>
+        <span class="s1">result.extend(maybe_constructable)</span>
+        <span class="s0">return </span><span class="s1">result</span>
+
+    <span class="s0">def </span><span class="s1">__ror__(self, other: object) -&gt; Self:</span>
+        <span class="s2"># Supports merging header dicts using operator | when other is on left side</span>
+        <span class="s2"># combining items with add instead of __setitem__</span>
+        <span class="s1">maybe_constructable = ensure_can_construct_http_header_dict(other)</span>
+        <span class="s0">if </span><span class="s1">maybe_constructable </span><span class="s0">is None</span><span class="s1">:</span>
+            <span class="s0">return </span><span class="s1">NotImplemented</span>
+        <span class="s1">result = type(self)(maybe_constructable)</span>
+        <span class="s1">result.extend(self)</span>
+        <span class="s0">return </span><span class="s1">result</span>
+</pre>
+</body>
+</html>

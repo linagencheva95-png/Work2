@@ -1,0 +1,988 @@
+<html>
+<head>
+<title>lexer.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #8c8c8c; font-style: italic;}
+.s1 { color: #080808;}
+.s2 { color: #0033b3;}
+.s3 { color: #067d17;}
+.s4 { color: #0037a6;}
+.s5 { color: #8a822d;}
+.s6 { color: #1750eb;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+lexer.py</font>
+</center></td></tr></table>
+<pre><span class="s0">&quot;&quot;&quot; 
+    pygments.lexer 
+    ~~~~~~~~~~~~~~ 
+ 
+    Base lexer classes. 
+ 
+    :copyright: Copyright 2006-present by the Pygments team, see AUTHORS. 
+    :license: BSD, see LICENSE for details. 
+&quot;&quot;&quot;</span>
+
+<span class="s2">import </span><span class="s1">re</span>
+<span class="s2">import </span><span class="s1">sys</span>
+<span class="s2">import </span><span class="s1">time</span>
+
+<span class="s2">from </span><span class="s1">pip._vendor.pygments.filter </span><span class="s2">import </span><span class="s1">apply_filters, Filter</span>
+<span class="s2">from </span><span class="s1">pip._vendor.pygments.filters </span><span class="s2">import </span><span class="s1">get_filter_by_name</span>
+<span class="s2">from </span><span class="s1">pip._vendor.pygments.token </span><span class="s2">import </span><span class="s1">Error, Text, Other, Whitespace, _TokenType</span>
+<span class="s2">from </span><span class="s1">pip._vendor.pygments.util </span><span class="s2">import </span><span class="s1">get_bool_opt, get_int_opt, get_list_opt, \</span>
+    <span class="s1">make_analysator, Future, guess_decode</span>
+<span class="s2">from </span><span class="s1">pip._vendor.pygments.regexopt </span><span class="s2">import </span><span class="s1">regex_opt</span>
+
+<span class="s1">__all__ = [</span><span class="s3">'Lexer'</span><span class="s1">, </span><span class="s3">'RegexLexer'</span><span class="s1">, </span><span class="s3">'ExtendedRegexLexer'</span><span class="s1">, </span><span class="s3">'DelegatingLexer'</span><span class="s1">,</span>
+           <span class="s3">'LexerContext'</span><span class="s1">, </span><span class="s3">'include'</span><span class="s1">, </span><span class="s3">'inherit'</span><span class="s1">, </span><span class="s3">'bygroups'</span><span class="s1">, </span><span class="s3">'using'</span><span class="s1">, </span><span class="s3">'this'</span><span class="s1">,</span>
+           <span class="s3">'default'</span><span class="s1">, </span><span class="s3">'words'</span><span class="s1">, </span><span class="s3">'line_re'</span><span class="s1">]</span>
+
+<span class="s1">line_re = re.compile(</span><span class="s3">'.*?</span><span class="s4">\n</span><span class="s3">'</span><span class="s1">)</span>
+
+<span class="s1">_encoding_map = [(</span><span class="s5">b'</span><span class="s4">\xef\xbb\xbf</span><span class="s5">'</span><span class="s1">, </span><span class="s3">'utf-8'</span><span class="s1">),</span>
+                 <span class="s1">(</span><span class="s5">b'</span><span class="s4">\xff\xfe\0\0</span><span class="s5">'</span><span class="s1">, </span><span class="s3">'utf-32'</span><span class="s1">),</span>
+                 <span class="s1">(</span><span class="s5">b'</span><span class="s4">\0\0\xfe\xff</span><span class="s5">'</span><span class="s1">, </span><span class="s3">'utf-32be'</span><span class="s1">),</span>
+                 <span class="s1">(</span><span class="s5">b'</span><span class="s4">\xff\xfe</span><span class="s5">'</span><span class="s1">, </span><span class="s3">'utf-16'</span><span class="s1">),</span>
+                 <span class="s1">(</span><span class="s5">b'</span><span class="s4">\xfe\xff</span><span class="s5">'</span><span class="s1">, </span><span class="s3">'utf-16be'</span><span class="s1">)]</span>
+
+<span class="s1">_default_analyse = staticmethod(</span><span class="s2">lambda </span><span class="s1">x: </span><span class="s6">0.0</span><span class="s1">)</span>
+
+
+<span class="s2">class </span><span class="s1">LexerMeta(type):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    This metaclass automagically converts ``analyse_text`` methods into 
+    static methods which always return float values. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s2">def </span><span class="s1">__new__(mcs, name, bases, d):</span>
+        <span class="s2">if </span><span class="s3">'analyse_text' </span><span class="s2">in </span><span class="s1">d:</span>
+            <span class="s1">d[</span><span class="s3">'analyse_text'</span><span class="s1">] = make_analysator(d[</span><span class="s3">'analyse_text'</span><span class="s1">])</span>
+        <span class="s2">return </span><span class="s1">type.__new__(mcs, name, bases, d)</span>
+
+
+<span class="s2">class </span><span class="s1">Lexer(metaclass=LexerMeta):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Lexer for a specific language. 
+ 
+    See also :doc:`lexerdevelopment`, a high-level guide to writing 
+    lexers. 
+ 
+    Lexer classes have attributes used for choosing the most appropriate 
+    lexer based on various criteria. 
+ 
+    .. autoattribute:: name 
+       :no-value: 
+    .. autoattribute:: aliases 
+       :no-value: 
+    .. autoattribute:: filenames 
+       :no-value: 
+    .. autoattribute:: alias_filenames 
+    .. autoattribute:: mimetypes 
+       :no-value: 
+    .. autoattribute:: priority 
+ 
+    Lexers included in Pygments should have two additional attributes: 
+ 
+    .. autoattribute:: url 
+       :no-value: 
+    .. autoattribute:: version_added 
+       :no-value: 
+ 
+    Lexers included in Pygments may have additional attributes: 
+ 
+    .. autoattribute:: _example 
+       :no-value: 
+ 
+    You can pass options to the constructor. The basic options recognized 
+    by all lexers and processed by the base `Lexer` class are: 
+ 
+    ``stripnl`` 
+        Strip leading and trailing newlines from the input (default: True). 
+    ``stripall`` 
+        Strip all leading and trailing whitespace from the input 
+        (default: False). 
+    ``ensurenl`` 
+        Make sure that the input ends with a newline (default: True).  This 
+        is required for some lexers that consume input linewise. 
+ 
+        .. versionadded:: 1.3 
+ 
+    ``tabsize`` 
+        If given and greater than 0, expand tabs in the input (default: 0). 
+    ``encoding`` 
+        If given, must be an encoding name. This encoding will be used to 
+        convert the input string to Unicode, if it is not already a Unicode 
+        string (default: ``'guess'``, which uses a simple UTF-8 / Locale / 
+        Latin1 detection.  Can also be ``'chardet'`` to use the chardet 
+        library, if it is installed. 
+    ``inencoding`` 
+        Overrides the ``encoding`` if given. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s0">#: Full name of the lexer, in human-readable form</span>
+    <span class="s1">name = </span><span class="s2">None</span>
+
+    <span class="s0">#: A list of short, unique identifiers that can be used to look</span>
+    <span class="s0">#: up the lexer from a list, e.g., using `get_lexer_by_name()`.</span>
+    <span class="s1">aliases = []</span>
+
+    <span class="s0">#: A list of `fnmatch` patterns that match filenames which contain</span>
+    <span class="s0">#: content for this lexer. The patterns in this list should be unique among</span>
+    <span class="s0">#: all lexers.</span>
+    <span class="s1">filenames = []</span>
+
+    <span class="s0">#: A list of `fnmatch` patterns that match filenames which may or may not</span>
+    <span class="s0">#: contain content for this lexer. This list is used by the</span>
+    <span class="s0">#: :func:`.guess_lexer_for_filename()` function, to determine which lexers</span>
+    <span class="s0">#: are then included in guessing the correct one. That means that</span>
+    <span class="s0">#: e.g. every lexer for HTML and a template language should include</span>
+    <span class="s0">#: ``\*.html`` in this list.</span>
+    <span class="s1">alias_filenames = []</span>
+
+    <span class="s0">#: A list of MIME types for content that can be lexed with this lexer.</span>
+    <span class="s1">mimetypes = []</span>
+
+    <span class="s0">#: Priority, should multiple lexers match and no content is provided</span>
+    <span class="s1">priority = </span><span class="s6">0</span>
+
+    <span class="s0">#: URL of the language specification/definition. Used in the Pygments</span>
+    <span class="s0">#: documentation. Set to an empty string to disable.</span>
+    <span class="s1">url = </span><span class="s2">None</span>
+
+    <span class="s0">#: Version of Pygments in which the lexer was added.</span>
+    <span class="s1">version_added = </span><span class="s2">None</span>
+
+    <span class="s0">#: Example file name. Relative to the ``tests/examplefiles`` directory.</span>
+    <span class="s0">#: This is used by the documentation generator to show an example.</span>
+    <span class="s1">_example = </span><span class="s2">None</span>
+
+    <span class="s2">def </span><span class="s1">__init__(self, **options):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        This constructor takes arbitrary options as keyword arguments. 
+        Every subclass must first process its own options and then call 
+        the `Lexer` constructor, since it processes the basic 
+        options like `stripnl`. 
+ 
+        An example looks like this: 
+ 
+        .. sourcecode:: python 
+ 
+           def __init__(self, **options): 
+               self.compress = options.get('compress', '') 
+               Lexer.__init__(self, **options) 
+ 
+        As these options must all be specifiable as strings (due to the 
+        command line usage), there are various utility functions 
+        available to help with that, see `Utilities`_. 
+        &quot;&quot;&quot;</span>
+        <span class="s1">self.options = options</span>
+        <span class="s1">self.stripnl = get_bool_opt(options, </span><span class="s3">'stripnl'</span><span class="s1">, </span><span class="s2">True</span><span class="s1">)</span>
+        <span class="s1">self.stripall = get_bool_opt(options, </span><span class="s3">'stripall'</span><span class="s1">, </span><span class="s2">False</span><span class="s1">)</span>
+        <span class="s1">self.ensurenl = get_bool_opt(options, </span><span class="s3">'ensurenl'</span><span class="s1">, </span><span class="s2">True</span><span class="s1">)</span>
+        <span class="s1">self.tabsize = get_int_opt(options, </span><span class="s3">'tabsize'</span><span class="s1">, </span><span class="s6">0</span><span class="s1">)</span>
+        <span class="s1">self.encoding = options.get(</span><span class="s3">'encoding'</span><span class="s1">, </span><span class="s3">'guess'</span><span class="s1">)</span>
+        <span class="s1">self.encoding = options.get(</span><span class="s3">'inencoding'</span><span class="s1">) </span><span class="s2">or </span><span class="s1">self.encoding</span>
+        <span class="s1">self.filters = []</span>
+        <span class="s2">for </span><span class="s1">filter_ </span><span class="s2">in </span><span class="s1">get_list_opt(options, </span><span class="s3">'filters'</span><span class="s1">, ()):</span>
+            <span class="s1">self.add_filter(filter_)</span>
+
+    <span class="s2">def </span><span class="s1">__repr__(self):</span>
+        <span class="s2">if </span><span class="s1">self.options:</span>
+            <span class="s2">return </span><span class="s3">f'&lt;pygments.lexers.</span><span class="s4">{</span><span class="s1">self.__class__.__name__</span><span class="s4">} </span><span class="s3">with </span><span class="s4">{</span><span class="s1">self.options</span><span class="s4">!r}</span><span class="s3">&gt;'</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s2">return </span><span class="s3">f'&lt;pygments.lexers.</span><span class="s4">{</span><span class="s1">self.__class__.__name__</span><span class="s4">}</span><span class="s3">&gt;'</span>
+
+    <span class="s2">def </span><span class="s1">add_filter(self, filter_, **options):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        Add a new stream filter to this lexer. 
+        &quot;&quot;&quot;</span>
+        <span class="s2">if not </span><span class="s1">isinstance(filter_, Filter):</span>
+            <span class="s1">filter_ = get_filter_by_name(filter_, **options)</span>
+        <span class="s1">self.filters.append(filter_)</span>
+
+    <span class="s2">def </span><span class="s1">analyse_text(text):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        A static method which is called for lexer guessing. 
+ 
+        It should analyse the text and return a float in the range 
+        from ``0.0`` to ``1.0``.  If it returns ``0.0``, the lexer 
+        will not be selected as the most probable one, if it returns 
+        ``1.0``, it will be selected immediately.  This is used by 
+        `guess_lexer`. 
+ 
+        The `LexerMeta` metaclass automatically wraps this function so 
+        that it works like a static method (no ``self`` or ``cls`` 
+        parameter) and the return value is automatically converted to 
+        `float`. If the return value is an object that is boolean `False` 
+        it's the same as if the return values was ``0.0``. 
+        &quot;&quot;&quot;</span>
+
+    <span class="s2">def </span><span class="s1">_preprocess_lexer_input(self, text):</span>
+        <span class="s0">&quot;&quot;&quot;Apply preprocessing such as decoding the input, removing BOM and normalizing newlines.&quot;&quot;&quot;</span>
+
+        <span class="s2">if not </span><span class="s1">isinstance(text, str):</span>
+            <span class="s2">if </span><span class="s1">self.encoding == </span><span class="s3">'guess'</span><span class="s1">:</span>
+                <span class="s1">text, _ = guess_decode(text)</span>
+            <span class="s2">elif </span><span class="s1">self.encoding == </span><span class="s3">'chardet'</span><span class="s1">:</span>
+                <span class="s2">try</span><span class="s1">:</span>
+                    <span class="s0"># pip vendoring note: this code is not reachable by pip,</span>
+                    <span class="s0"># removed import of chardet to make it clear.</span>
+                    <span class="s2">raise </span><span class="s1">ImportError(</span><span class="s3">'chardet is not vendored by pip'</span><span class="s1">)</span>
+                <span class="s2">except </span><span class="s1">ImportError </span><span class="s2">as </span><span class="s1">e:</span>
+                    <span class="s2">raise </span><span class="s1">ImportError(</span><span class="s3">'To enable chardet encoding guessing, '</span>
+                                      <span class="s3">'please install the chardet library '</span>
+                                      <span class="s3">'from http://chardet.feedparser.org/'</span><span class="s1">) </span><span class="s2">from </span><span class="s1">e</span>
+                <span class="s0"># check for BOM first</span>
+                <span class="s1">decoded = </span><span class="s2">None</span>
+                <span class="s2">for </span><span class="s1">bom, encoding </span><span class="s2">in </span><span class="s1">_encoding_map:</span>
+                    <span class="s2">if </span><span class="s1">text.startswith(bom):</span>
+                        <span class="s1">decoded = text[len(bom):].decode(encoding, </span><span class="s3">'replace'</span><span class="s1">)</span>
+                        <span class="s2">break</span>
+                <span class="s0"># no BOM found, so use chardet</span>
+                <span class="s2">if </span><span class="s1">decoded </span><span class="s2">is None</span><span class="s1">:</span>
+                    <span class="s1">enc = chardet.detect(text[:</span><span class="s6">1024</span><span class="s1">])  </span><span class="s0"># Guess using first 1KB</span>
+                    <span class="s1">decoded = text.decode(enc.get(</span><span class="s3">'encoding'</span><span class="s1">) </span><span class="s2">or </span><span class="s3">'utf-8'</span><span class="s1">,</span>
+                                          <span class="s3">'replace'</span><span class="s1">)</span>
+                <span class="s1">text = decoded</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s1">text = text.decode(self.encoding)</span>
+                <span class="s2">if </span><span class="s1">text.startswith(</span><span class="s3">'</span><span class="s4">\ufeff</span><span class="s3">'</span><span class="s1">):</span>
+                    <span class="s1">text = text[len(</span><span class="s3">'</span><span class="s4">\ufeff</span><span class="s3">'</span><span class="s1">):]</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s2">if </span><span class="s1">text.startswith(</span><span class="s3">'</span><span class="s4">\ufeff</span><span class="s3">'</span><span class="s1">):</span>
+                <span class="s1">text = text[len(</span><span class="s3">'</span><span class="s4">\ufeff</span><span class="s3">'</span><span class="s1">):]</span>
+
+        <span class="s0"># text now *is* a unicode string</span>
+        <span class="s1">text = text.replace(</span><span class="s3">'</span><span class="s4">\r\n</span><span class="s3">'</span><span class="s1">, </span><span class="s3">'</span><span class="s4">\n</span><span class="s3">'</span><span class="s1">)</span>
+        <span class="s1">text = text.replace(</span><span class="s3">'</span><span class="s4">\r</span><span class="s3">'</span><span class="s1">, </span><span class="s3">'</span><span class="s4">\n</span><span class="s3">'</span><span class="s1">)</span>
+        <span class="s2">if </span><span class="s1">self.stripall:</span>
+            <span class="s1">text = text.strip()</span>
+        <span class="s2">elif </span><span class="s1">self.stripnl:</span>
+            <span class="s1">text = text.strip(</span><span class="s3">'</span><span class="s4">\n</span><span class="s3">'</span><span class="s1">)</span>
+        <span class="s2">if </span><span class="s1">self.tabsize &gt; </span><span class="s6">0</span><span class="s1">:</span>
+            <span class="s1">text = text.expandtabs(self.tabsize)</span>
+        <span class="s2">if </span><span class="s1">self.ensurenl </span><span class="s2">and not </span><span class="s1">text.endswith(</span><span class="s3">'</span><span class="s4">\n</span><span class="s3">'</span><span class="s1">):</span>
+            <span class="s1">text += </span><span class="s3">'</span><span class="s4">\n</span><span class="s3">'</span>
+
+        <span class="s2">return </span><span class="s1">text</span>
+
+    <span class="s2">def </span><span class="s1">get_tokens(self, text, unfiltered=</span><span class="s2">False</span><span class="s1">):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        This method is the basic interface of a lexer. It is called by 
+        the `highlight()` function. It must process the text and return an 
+        iterable of ``(tokentype, value)`` pairs from `text`. 
+ 
+        Normally, you don't need to override this method. The default 
+        implementation processes the options recognized by all lexers 
+        (`stripnl`, `stripall` and so on), and then yields all tokens 
+        from `get_tokens_unprocessed()`, with the ``index`` dropped. 
+ 
+        If `unfiltered` is set to `True`, the filtering mechanism is 
+        bypassed even if filters are defined. 
+        &quot;&quot;&quot;</span>
+        <span class="s1">text = self._preprocess_lexer_input(text)</span>
+
+        <span class="s2">def </span><span class="s1">streamer():</span>
+            <span class="s2">for </span><span class="s1">_, t, v </span><span class="s2">in </span><span class="s1">self.get_tokens_unprocessed(text):</span>
+                <span class="s2">yield </span><span class="s1">t, v</span>
+        <span class="s1">stream = streamer()</span>
+        <span class="s2">if not </span><span class="s1">unfiltered:</span>
+            <span class="s1">stream = apply_filters(stream, self.filters, self)</span>
+        <span class="s2">return </span><span class="s1">stream</span>
+
+    <span class="s2">def </span><span class="s1">get_tokens_unprocessed(self, text):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        This method should process the text and return an iterable of 
+        ``(index, tokentype, value)`` tuples where ``index`` is the starting 
+        position of the token within the input text. 
+ 
+        It must be overridden by subclasses. It is recommended to 
+        implement it as a generator to maximize effectiveness. 
+        &quot;&quot;&quot;</span>
+        <span class="s2">raise </span><span class="s1">NotImplementedError</span>
+
+
+<span class="s2">class </span><span class="s1">DelegatingLexer(Lexer):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    This lexer takes two lexer as arguments. A root lexer and 
+    a language lexer. First everything is scanned using the language 
+    lexer, afterwards all ``Other`` tokens are lexed using the root 
+    lexer. 
+ 
+    The lexers from the ``template`` lexer package use this base lexer. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s2">def </span><span class="s1">__init__(self, _root_lexer, _language_lexer, _needle=Other, **options):</span>
+        <span class="s1">self.root_lexer = _root_lexer(**options)</span>
+        <span class="s1">self.language_lexer = _language_lexer(**options)</span>
+        <span class="s1">self.needle = _needle</span>
+        <span class="s1">Lexer.__init__(self, **options)</span>
+
+    <span class="s2">def </span><span class="s1">get_tokens_unprocessed(self, text):</span>
+        <span class="s1">buffered = </span><span class="s3">''</span>
+        <span class="s1">insertions = []</span>
+        <span class="s1">lng_buffer = []</span>
+        <span class="s2">for </span><span class="s1">i, t, v </span><span class="s2">in </span><span class="s1">self.language_lexer.get_tokens_unprocessed(text):</span>
+            <span class="s2">if </span><span class="s1">t </span><span class="s2">is </span><span class="s1">self.needle:</span>
+                <span class="s2">if </span><span class="s1">lng_buffer:</span>
+                    <span class="s1">insertions.append((len(buffered), lng_buffer))</span>
+                    <span class="s1">lng_buffer = []</span>
+                <span class="s1">buffered += v</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s1">lng_buffer.append((i, t, v))</span>
+        <span class="s2">if </span><span class="s1">lng_buffer:</span>
+            <span class="s1">insertions.append((len(buffered), lng_buffer))</span>
+        <span class="s2">return </span><span class="s1">do_insertions(insertions,</span>
+                             <span class="s1">self.root_lexer.get_tokens_unprocessed(buffered))</span>
+
+
+<span class="s0"># ------------------------------------------------------------------------------</span>
+<span class="s0"># RegexLexer and ExtendedRegexLexer</span>
+<span class="s0">#</span>
+
+
+<span class="s2">class </span><span class="s1">include(str):  </span><span class="s0"># pylint: disable=invalid-name</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Indicates that a state should include rules from another state. 
+    &quot;&quot;&quot;</span>
+    <span class="s2">pass</span>
+
+
+<span class="s2">class </span><span class="s1">_inherit:</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Indicates the a state should inherit from its superclass. 
+    &quot;&quot;&quot;</span>
+    <span class="s2">def </span><span class="s1">__repr__(self):</span>
+        <span class="s2">return </span><span class="s3">'inherit'</span>
+
+<span class="s1">inherit = _inherit()  </span><span class="s0"># pylint: disable=invalid-name</span>
+
+
+<span class="s2">class </span><span class="s1">combined(tuple):  </span><span class="s0"># pylint: disable=invalid-name</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Indicates a state combined from multiple states. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s2">def </span><span class="s1">__new__(cls, *args):</span>
+        <span class="s2">return </span><span class="s1">tuple.__new__(cls, args)</span>
+
+    <span class="s2">def </span><span class="s1">__init__(self, *args):</span>
+        <span class="s0"># tuple.__init__ doesn't do anything</span>
+        <span class="s2">pass</span>
+
+
+<span class="s2">class </span><span class="s1">_PseudoMatch:</span>
+    <span class="s0">&quot;&quot;&quot; 
+    A pseudo match object constructed from a string. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s2">def </span><span class="s1">__init__(self, start, text):</span>
+        <span class="s1">self._text = text</span>
+        <span class="s1">self._start = start</span>
+
+    <span class="s2">def </span><span class="s1">start(self, arg=</span><span class="s2">None</span><span class="s1">):</span>
+        <span class="s2">return </span><span class="s1">self._start</span>
+
+    <span class="s2">def </span><span class="s1">end(self, arg=</span><span class="s2">None</span><span class="s1">):</span>
+        <span class="s2">return </span><span class="s1">self._start + len(self._text)</span>
+
+    <span class="s2">def </span><span class="s1">group(self, arg=</span><span class="s2">None</span><span class="s1">):</span>
+        <span class="s2">if </span><span class="s1">arg:</span>
+            <span class="s2">raise </span><span class="s1">IndexError(</span><span class="s3">'No such group'</span><span class="s1">)</span>
+        <span class="s2">return </span><span class="s1">self._text</span>
+
+    <span class="s2">def </span><span class="s1">groups(self):</span>
+        <span class="s2">return </span><span class="s1">(self._text,)</span>
+
+    <span class="s2">def </span><span class="s1">groupdict(self):</span>
+        <span class="s2">return </span><span class="s1">{}</span>
+
+
+<span class="s2">def </span><span class="s1">bygroups(*args):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Callback that yields multiple actions for each group in the match. 
+    &quot;&quot;&quot;</span>
+    <span class="s2">def </span><span class="s1">callback(lexer, match, ctx=</span><span class="s2">None</span><span class="s1">):</span>
+        <span class="s2">for </span><span class="s1">i, action </span><span class="s2">in </span><span class="s1">enumerate(args):</span>
+            <span class="s2">if </span><span class="s1">action </span><span class="s2">is None</span><span class="s1">:</span>
+                <span class="s2">continue</span>
+            <span class="s2">elif </span><span class="s1">type(action) </span><span class="s2">is </span><span class="s1">_TokenType:</span>
+                <span class="s1">data = match.group(i + </span><span class="s6">1</span><span class="s1">)</span>
+                <span class="s2">if </span><span class="s1">data:</span>
+                    <span class="s2">yield </span><span class="s1">match.start(i + </span><span class="s6">1</span><span class="s1">), action, data</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s1">data = match.group(i + </span><span class="s6">1</span><span class="s1">)</span>
+                <span class="s2">if </span><span class="s1">data </span><span class="s2">is not None</span><span class="s1">:</span>
+                    <span class="s2">if </span><span class="s1">ctx:</span>
+                        <span class="s1">ctx.pos = match.start(i + </span><span class="s6">1</span><span class="s1">)</span>
+                    <span class="s2">for </span><span class="s1">item </span><span class="s2">in </span><span class="s1">action(lexer,</span>
+                                       <span class="s1">_PseudoMatch(match.start(i + </span><span class="s6">1</span><span class="s1">), data), ctx):</span>
+                        <span class="s2">if </span><span class="s1">item:</span>
+                            <span class="s2">yield </span><span class="s1">item</span>
+        <span class="s2">if </span><span class="s1">ctx:</span>
+            <span class="s1">ctx.pos = match.end()</span>
+    <span class="s2">return </span><span class="s1">callback</span>
+
+
+<span class="s2">class </span><span class="s1">_This:</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Special singleton used for indicating the caller class. 
+    Used by ``using``. 
+    &quot;&quot;&quot;</span>
+
+<span class="s1">this = _This()</span>
+
+
+<span class="s2">def </span><span class="s1">using(_other, **kwargs):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Callback that processes the match with a different lexer. 
+ 
+    The keyword arguments are forwarded to the lexer, except `state` which 
+    is handled separately. 
+ 
+    `state` specifies the state that the new lexer will start in, and can 
+    be an enumerable such as ('root', 'inline', 'string') or a simple 
+    string which is assumed to be on top of the root state. 
+ 
+    Note: For that to work, `_other` must not be an `ExtendedRegexLexer`. 
+    &quot;&quot;&quot;</span>
+    <span class="s1">gt_kwargs = {}</span>
+    <span class="s2">if </span><span class="s3">'state' </span><span class="s2">in </span><span class="s1">kwargs:</span>
+        <span class="s1">s = kwargs.pop(</span><span class="s3">'state'</span><span class="s1">)</span>
+        <span class="s2">if </span><span class="s1">isinstance(s, (list, tuple)):</span>
+            <span class="s1">gt_kwargs[</span><span class="s3">'stack'</span><span class="s1">] = s</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s1">gt_kwargs[</span><span class="s3">'stack'</span><span class="s1">] = (</span><span class="s3">'root'</span><span class="s1">, s)</span>
+
+    <span class="s2">if </span><span class="s1">_other </span><span class="s2">is </span><span class="s1">this:</span>
+        <span class="s2">def </span><span class="s1">callback(lexer, match, ctx=</span><span class="s2">None</span><span class="s1">):</span>
+            <span class="s0"># if keyword arguments are given the callback</span>
+            <span class="s0"># function has to create a new lexer instance</span>
+            <span class="s2">if </span><span class="s1">kwargs:</span>
+                <span class="s0"># XXX: cache that somehow</span>
+                <span class="s1">d = dict(lexer.options)</span>
+                <span class="s1">d.update(kwargs)</span>
+                <span class="s1">lx = lexer.__class__(**d)</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s1">lx = lexer</span>
+            <span class="s1">s = match.start()</span>
+            <span class="s2">for </span><span class="s1">i, t, v </span><span class="s2">in </span><span class="s1">lx.get_tokens_unprocessed(match.group(), **gt_kwargs):</span>
+                <span class="s2">yield </span><span class="s1">i + s, t, v</span>
+            <span class="s2">if </span><span class="s1">ctx:</span>
+                <span class="s1">ctx.pos = match.end()</span>
+    <span class="s2">else</span><span class="s1">:</span>
+        <span class="s2">def </span><span class="s1">callback(lexer, match, ctx=</span><span class="s2">None</span><span class="s1">):</span>
+            <span class="s0"># XXX: cache that somehow</span>
+            <span class="s1">d = dict(lexer.options)</span>
+            <span class="s1">d.update(kwargs)</span>
+            <span class="s1">lx = _other(**d)</span>
+
+            <span class="s1">s = match.start()</span>
+            <span class="s2">for </span><span class="s1">i, t, v </span><span class="s2">in </span><span class="s1">lx.get_tokens_unprocessed(match.group(), **gt_kwargs):</span>
+                <span class="s2">yield </span><span class="s1">i + s, t, v</span>
+            <span class="s2">if </span><span class="s1">ctx:</span>
+                <span class="s1">ctx.pos = match.end()</span>
+    <span class="s2">return </span><span class="s1">callback</span>
+
+
+<span class="s2">class </span><span class="s1">default:</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Indicates a state or state action (e.g. #pop) to apply. 
+    For example default('#pop') is equivalent to ('', Token, '#pop') 
+    Note that state tuples may be used as well. 
+ 
+    .. versionadded:: 2.0 
+    &quot;&quot;&quot;</span>
+    <span class="s2">def </span><span class="s1">__init__(self, state):</span>
+        <span class="s1">self.state = state</span>
+
+
+<span class="s2">class </span><span class="s1">words(Future):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Indicates a list of literal words that is transformed into an optimized 
+    regex that matches any of the words. 
+ 
+    .. versionadded:: 2.0 
+    &quot;&quot;&quot;</span>
+    <span class="s2">def </span><span class="s1">__init__(self, words, prefix=</span><span class="s3">''</span><span class="s1">, suffix=</span><span class="s3">''</span><span class="s1">):</span>
+        <span class="s1">self.words = words</span>
+        <span class="s1">self.prefix = prefix</span>
+        <span class="s1">self.suffix = suffix</span>
+
+    <span class="s2">def </span><span class="s1">get(self):</span>
+        <span class="s2">return </span><span class="s1">regex_opt(self.words, prefix=self.prefix, suffix=self.suffix)</span>
+
+
+<span class="s2">class </span><span class="s1">RegexLexerMeta(LexerMeta):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Metaclass for RegexLexer, creates the self._tokens attribute from 
+    self.tokens on the first instantiation. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s2">def </span><span class="s1">_process_regex(cls, regex, rflags, state):</span>
+        <span class="s0">&quot;&quot;&quot;Preprocess the regular expression component of a token definition.&quot;&quot;&quot;</span>
+        <span class="s2">if </span><span class="s1">isinstance(regex, Future):</span>
+            <span class="s1">regex = regex.get()</span>
+        <span class="s2">return </span><span class="s1">re.compile(regex, rflags).match</span>
+
+    <span class="s2">def </span><span class="s1">_process_token(cls, token):</span>
+        <span class="s0">&quot;&quot;&quot;Preprocess the token component of a token definition.&quot;&quot;&quot;</span>
+        <span class="s2">assert </span><span class="s1">type(token) </span><span class="s2">is </span><span class="s1">_TokenType </span><span class="s2">or </span><span class="s1">callable(token), \</span>
+            <span class="s3">f'token type must be simple type or callable, not </span><span class="s4">{</span><span class="s1">token</span><span class="s4">!r}</span><span class="s3">'</span>
+        <span class="s2">return </span><span class="s1">token</span>
+
+    <span class="s2">def </span><span class="s1">_process_new_state(cls, new_state, unprocessed, processed):</span>
+        <span class="s0">&quot;&quot;&quot;Preprocess the state transition action of a token definition.&quot;&quot;&quot;</span>
+        <span class="s2">if </span><span class="s1">isinstance(new_state, str):</span>
+            <span class="s0"># an existing state</span>
+            <span class="s2">if </span><span class="s1">new_state == </span><span class="s3">'#pop'</span><span class="s1">:</span>
+                <span class="s2">return </span><span class="s1">-</span><span class="s6">1</span>
+            <span class="s2">elif </span><span class="s1">new_state </span><span class="s2">in </span><span class="s1">unprocessed:</span>
+                <span class="s2">return </span><span class="s1">(new_state,)</span>
+            <span class="s2">elif </span><span class="s1">new_state == </span><span class="s3">'#push'</span><span class="s1">:</span>
+                <span class="s2">return </span><span class="s1">new_state</span>
+            <span class="s2">elif </span><span class="s1">new_state[:</span><span class="s6">5</span><span class="s1">] == </span><span class="s3">'#pop:'</span><span class="s1">:</span>
+                <span class="s2">return </span><span class="s1">-int(new_state[</span><span class="s6">5</span><span class="s1">:])</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s2">assert False</span><span class="s1">, </span><span class="s3">f'unknown new state </span><span class="s4">{</span><span class="s1">new_state</span><span class="s4">!r}</span><span class="s3">'</span>
+        <span class="s2">elif </span><span class="s1">isinstance(new_state, combined):</span>
+            <span class="s0"># combine a new state from existing ones</span>
+            <span class="s1">tmp_state = </span><span class="s3">'_tmp_%d' </span><span class="s1">% cls._tmpname</span>
+            <span class="s1">cls._tmpname += </span><span class="s6">1</span>
+            <span class="s1">itokens = []</span>
+            <span class="s2">for </span><span class="s1">istate </span><span class="s2">in </span><span class="s1">new_state:</span>
+                <span class="s2">assert </span><span class="s1">istate != new_state, </span><span class="s3">f'circular state ref </span><span class="s4">{</span><span class="s1">istate</span><span class="s4">!r}</span><span class="s3">'</span>
+                <span class="s1">itokens.extend(cls._process_state(unprocessed,</span>
+                                                  <span class="s1">processed, istate))</span>
+            <span class="s1">processed[tmp_state] = itokens</span>
+            <span class="s2">return </span><span class="s1">(tmp_state,)</span>
+        <span class="s2">elif </span><span class="s1">isinstance(new_state, tuple):</span>
+            <span class="s0"># push more than one state</span>
+            <span class="s2">for </span><span class="s1">istate </span><span class="s2">in </span><span class="s1">new_state:</span>
+                <span class="s2">assert </span><span class="s1">(istate </span><span class="s2">in </span><span class="s1">unprocessed </span><span class="s2">or</span>
+                        <span class="s1">istate </span><span class="s2">in </span><span class="s1">(</span><span class="s3">'#pop'</span><span class="s1">, </span><span class="s3">'#push'</span><span class="s1">)), \</span>
+                    <span class="s3">'unknown new state ' </span><span class="s1">+ istate</span>
+            <span class="s2">return </span><span class="s1">new_state</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s2">assert False</span><span class="s1">, </span><span class="s3">f'unknown new state def </span><span class="s4">{</span><span class="s1">new_state</span><span class="s4">!r}</span><span class="s3">'</span>
+
+    <span class="s2">def </span><span class="s1">_process_state(cls, unprocessed, processed, state):</span>
+        <span class="s0">&quot;&quot;&quot;Preprocess a single state definition.&quot;&quot;&quot;</span>
+        <span class="s2">assert </span><span class="s1">isinstance(state, str), </span><span class="s3">f&quot;wrong state name </span><span class="s4">{</span><span class="s1">state</span><span class="s4">!r}</span><span class="s3">&quot;</span>
+        <span class="s2">assert </span><span class="s1">state[</span><span class="s6">0</span><span class="s1">] != </span><span class="s3">'#'</span><span class="s1">, </span><span class="s3">f&quot;invalid state name </span><span class="s4">{</span><span class="s1">state</span><span class="s4">!r}</span><span class="s3">&quot;</span>
+        <span class="s2">if </span><span class="s1">state </span><span class="s2">in </span><span class="s1">processed:</span>
+            <span class="s2">return </span><span class="s1">processed[state]</span>
+        <span class="s1">tokens = processed[state] = []</span>
+        <span class="s1">rflags = cls.flags</span>
+        <span class="s2">for </span><span class="s1">tdef </span><span class="s2">in </span><span class="s1">unprocessed[state]:</span>
+            <span class="s2">if </span><span class="s1">isinstance(tdef, include):</span>
+                <span class="s0"># it's a state reference</span>
+                <span class="s2">assert </span><span class="s1">tdef != state, </span><span class="s3">f&quot;circular state reference </span><span class="s4">{</span><span class="s1">state</span><span class="s4">!r}</span><span class="s3">&quot;</span>
+                <span class="s1">tokens.extend(cls._process_state(unprocessed, processed,</span>
+                                                 <span class="s1">str(tdef)))</span>
+                <span class="s2">continue</span>
+            <span class="s2">if </span><span class="s1">isinstance(tdef, _inherit):</span>
+                <span class="s0"># should be processed already, but may not in the case of:</span>
+                <span class="s0"># 1. the state has no counterpart in any parent</span>
+                <span class="s0"># 2. the state includes more than one 'inherit'</span>
+                <span class="s2">continue</span>
+            <span class="s2">if </span><span class="s1">isinstance(tdef, default):</span>
+                <span class="s1">new_state = cls._process_new_state(tdef.state, unprocessed, processed)</span>
+                <span class="s1">tokens.append((re.compile(</span><span class="s3">''</span><span class="s1">).match, </span><span class="s2">None</span><span class="s1">, new_state))</span>
+                <span class="s2">continue</span>
+
+            <span class="s2">assert </span><span class="s1">type(tdef) </span><span class="s2">is </span><span class="s1">tuple, </span><span class="s3">f&quot;wrong rule def </span><span class="s4">{</span><span class="s1">tdef</span><span class="s4">!r}</span><span class="s3">&quot;</span>
+
+            <span class="s2">try</span><span class="s1">:</span>
+                <span class="s1">rex = cls._process_regex(tdef[</span><span class="s6">0</span><span class="s1">], rflags, state)</span>
+            <span class="s2">except </span><span class="s1">Exception </span><span class="s2">as </span><span class="s1">err:</span>
+                <span class="s2">raise </span><span class="s1">ValueError(</span><span class="s3">f&quot;uncompilable regex </span><span class="s4">{</span><span class="s1">tdef[</span><span class="s6">0</span><span class="s1">]</span><span class="s4">!r} </span><span class="s3">in state </span><span class="s4">{</span><span class="s1">state</span><span class="s4">!r} </span><span class="s3">of </span><span class="s4">{</span><span class="s1">cls</span><span class="s4">!r}</span><span class="s3">: </span><span class="s4">{</span><span class="s1">err</span><span class="s4">}</span><span class="s3">&quot;</span><span class="s1">) </span><span class="s2">from </span><span class="s1">err</span>
+
+            <span class="s1">token = cls._process_token(tdef[</span><span class="s6">1</span><span class="s1">])</span>
+
+            <span class="s2">if </span><span class="s1">len(tdef) == </span><span class="s6">2</span><span class="s1">:</span>
+                <span class="s1">new_state = </span><span class="s2">None</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s1">new_state = cls._process_new_state(tdef[</span><span class="s6">2</span><span class="s1">],</span>
+                                                   <span class="s1">unprocessed, processed)</span>
+
+            <span class="s1">tokens.append((rex, token, new_state))</span>
+        <span class="s2">return </span><span class="s1">tokens</span>
+
+    <span class="s2">def </span><span class="s1">process_tokendef(cls, name, tokendefs=</span><span class="s2">None</span><span class="s1">):</span>
+        <span class="s0">&quot;&quot;&quot;Preprocess a dictionary of token definitions.&quot;&quot;&quot;</span>
+        <span class="s1">processed = cls._all_tokens[name] = {}</span>
+        <span class="s1">tokendefs = tokendefs </span><span class="s2">or </span><span class="s1">cls.tokens[name]</span>
+        <span class="s2">for </span><span class="s1">state </span><span class="s2">in </span><span class="s1">list(tokendefs):</span>
+            <span class="s1">cls._process_state(tokendefs, processed, state)</span>
+        <span class="s2">return </span><span class="s1">processed</span>
+
+    <span class="s2">def </span><span class="s1">get_tokendefs(cls):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        Merge tokens from superclasses in MRO order, returning a single tokendef 
+        dictionary. 
+ 
+        Any state that is not defined by a subclass will be inherited 
+        automatically.  States that *are* defined by subclasses will, by 
+        default, override that state in the superclass.  If a subclass wishes to 
+        inherit definitions from a superclass, it can use the special value 
+        &quot;inherit&quot;, which will cause the superclass' state definition to be 
+        included at that point in the state. 
+        &quot;&quot;&quot;</span>
+        <span class="s1">tokens = {}</span>
+        <span class="s1">inheritable = {}</span>
+        <span class="s2">for </span><span class="s1">c </span><span class="s2">in </span><span class="s1">cls.__mro__:</span>
+            <span class="s1">toks = c.__dict__.get(</span><span class="s3">'tokens'</span><span class="s1">, {})</span>
+
+            <span class="s2">for </span><span class="s1">state, items </span><span class="s2">in </span><span class="s1">toks.items():</span>
+                <span class="s1">curitems = tokens.get(state)</span>
+                <span class="s2">if </span><span class="s1">curitems </span><span class="s2">is None</span><span class="s1">:</span>
+                    <span class="s0"># N.b. because this is assigned by reference, sufficiently</span>
+                    <span class="s0"># deep hierarchies are processed incrementally (e.g. for</span>
+                    <span class="s0"># A(B), B(C), C(RegexLexer), B will be premodified so X(B)</span>
+                    <span class="s0"># will not see any inherits in B).</span>
+                    <span class="s1">tokens[state] = items</span>
+                    <span class="s2">try</span><span class="s1">:</span>
+                        <span class="s1">inherit_ndx = items.index(inherit)</span>
+                    <span class="s2">except </span><span class="s1">ValueError:</span>
+                        <span class="s2">continue</span>
+                    <span class="s1">inheritable[state] = inherit_ndx</span>
+                    <span class="s2">continue</span>
+
+                <span class="s1">inherit_ndx = inheritable.pop(state, </span><span class="s2">None</span><span class="s1">)</span>
+                <span class="s2">if </span><span class="s1">inherit_ndx </span><span class="s2">is None</span><span class="s1">:</span>
+                    <span class="s2">continue</span>
+
+                <span class="s0"># Replace the &quot;inherit&quot; value with the items</span>
+                <span class="s1">curitems[inherit_ndx:inherit_ndx+</span><span class="s6">1</span><span class="s1">] = items</span>
+                <span class="s2">try</span><span class="s1">:</span>
+                    <span class="s0"># N.b. this is the index in items (that is, the superclass</span>
+                    <span class="s0"># copy), so offset required when storing below.</span>
+                    <span class="s1">new_inh_ndx = items.index(inherit)</span>
+                <span class="s2">except </span><span class="s1">ValueError:</span>
+                    <span class="s2">pass</span>
+                <span class="s2">else</span><span class="s1">:</span>
+                    <span class="s1">inheritable[state] = inherit_ndx + new_inh_ndx</span>
+
+        <span class="s2">return </span><span class="s1">tokens</span>
+
+    <span class="s2">def </span><span class="s1">__call__(cls, *args, **kwds):</span>
+        <span class="s0">&quot;&quot;&quot;Instantiate cls after preprocessing its token definitions.&quot;&quot;&quot;</span>
+        <span class="s2">if </span><span class="s3">'_tokens' </span><span class="s2">not in </span><span class="s1">cls.__dict__:</span>
+            <span class="s1">cls._all_tokens = {}</span>
+            <span class="s1">cls._tmpname = </span><span class="s6">0</span>
+            <span class="s2">if </span><span class="s1">hasattr(cls, </span><span class="s3">'token_variants'</span><span class="s1">) </span><span class="s2">and </span><span class="s1">cls.token_variants:</span>
+                <span class="s0"># don't process yet</span>
+                <span class="s2">pass</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s1">cls._tokens = cls.process_tokendef(</span><span class="s3">''</span><span class="s1">, cls.get_tokendefs())</span>
+
+        <span class="s2">return </span><span class="s1">type.__call__(cls, *args, **kwds)</span>
+
+
+<span class="s2">class </span><span class="s1">RegexLexer(Lexer, metaclass=RegexLexerMeta):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Base for simple stateful regular expression-based lexers. 
+    Simplifies the lexing process so that you need only 
+    provide a list of states and regular expressions. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s0">#: Flags for compiling the regular expressions.</span>
+    <span class="s0">#: Defaults to MULTILINE.</span>
+    <span class="s1">flags = re.MULTILINE</span>
+
+    <span class="s0">#: At all time there is a stack of states. Initially, the stack contains</span>
+    <span class="s0">#: a single state 'root'. The top of the stack is called &quot;the current state&quot;.</span>
+    <span class="s0">#:</span>
+    <span class="s0">#: Dict of ``{'state': [(regex, tokentype, new_state), ...], ...}``</span>
+    <span class="s0">#:</span>
+    <span class="s0">#: ``new_state`` can be omitted to signify no state transition.</span>
+    <span class="s0">#: If ``new_state`` is a string, it is pushed on the stack. This ensure</span>
+    <span class="s0">#: the new current state is ``new_state``.</span>
+    <span class="s0">#: If ``new_state`` is a tuple of strings, all of those strings are pushed</span>
+    <span class="s0">#: on the stack and the current state will be the last element of the list.</span>
+    <span class="s0">#: ``new_state`` can also be ``combined('state1', 'state2', ...)``</span>
+    <span class="s0">#: to signify a new, anonymous state combined from the rules of two</span>
+    <span class="s0">#: or more existing ones.</span>
+    <span class="s0">#: Furthermore, it can be '#pop' to signify going back one step in</span>
+    <span class="s0">#: the state stack, or '#push' to push the current state on the stack</span>
+    <span class="s0">#: again. Note that if you push while in a combined state, the combined</span>
+    <span class="s0">#: state itself is pushed, and not only the state in which the rule is</span>
+    <span class="s0">#: defined.</span>
+    <span class="s0">#:</span>
+    <span class="s0">#: The tuple can also be replaced with ``include('state')``, in which</span>
+    <span class="s0">#: case the rules from the state named by the string are included in the</span>
+    <span class="s0">#: current one.</span>
+    <span class="s1">tokens = {}</span>
+
+    <span class="s2">def </span><span class="s1">get_tokens_unprocessed(self, text, stack=(</span><span class="s3">'root'</span><span class="s1">,)):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        Split ``text`` into (tokentype, text) pairs. 
+ 
+        ``stack`` is the initial stack (default: ``['root']``) 
+        &quot;&quot;&quot;</span>
+        <span class="s1">pos = </span><span class="s6">0</span>
+        <span class="s1">tokendefs = self._tokens</span>
+        <span class="s1">statestack = list(stack)</span>
+        <span class="s1">statetokens = tokendefs[statestack[-</span><span class="s6">1</span><span class="s1">]]</span>
+        <span class="s2">while </span><span class="s6">1</span><span class="s1">:</span>
+            <span class="s2">for </span><span class="s1">rexmatch, action, new_state </span><span class="s2">in </span><span class="s1">statetokens:</span>
+                <span class="s1">m = rexmatch(text, pos)</span>
+                <span class="s2">if </span><span class="s1">m:</span>
+                    <span class="s2">if </span><span class="s1">action </span><span class="s2">is not None</span><span class="s1">:</span>
+                        <span class="s2">if </span><span class="s1">type(action) </span><span class="s2">is </span><span class="s1">_TokenType:</span>
+                            <span class="s2">yield </span><span class="s1">pos, action, m.group()</span>
+                        <span class="s2">else</span><span class="s1">:</span>
+                            <span class="s2">yield from </span><span class="s1">action(self, m)</span>
+                    <span class="s1">pos = m.end()</span>
+                    <span class="s2">if </span><span class="s1">new_state </span><span class="s2">is not None</span><span class="s1">:</span>
+                        <span class="s0"># state transition</span>
+                        <span class="s2">if </span><span class="s1">isinstance(new_state, tuple):</span>
+                            <span class="s2">for </span><span class="s1">state </span><span class="s2">in </span><span class="s1">new_state:</span>
+                                <span class="s2">if </span><span class="s1">state == </span><span class="s3">'#pop'</span><span class="s1">:</span>
+                                    <span class="s2">if </span><span class="s1">len(statestack) &gt; </span><span class="s6">1</span><span class="s1">:</span>
+                                        <span class="s1">statestack.pop()</span>
+                                <span class="s2">elif </span><span class="s1">state == </span><span class="s3">'#push'</span><span class="s1">:</span>
+                                    <span class="s1">statestack.append(statestack[-</span><span class="s6">1</span><span class="s1">])</span>
+                                <span class="s2">else</span><span class="s1">:</span>
+                                    <span class="s1">statestack.append(state)</span>
+                        <span class="s2">elif </span><span class="s1">isinstance(new_state, int):</span>
+                            <span class="s0"># pop, but keep at least one state on the stack</span>
+                            <span class="s0"># (random code leading to unexpected pops should</span>
+                            <span class="s0"># not allow exceptions)</span>
+                            <span class="s2">if </span><span class="s1">abs(new_state) &gt;= len(statestack):</span>
+                                <span class="s2">del </span><span class="s1">statestack[</span><span class="s6">1</span><span class="s1">:]</span>
+                            <span class="s2">else</span><span class="s1">:</span>
+                                <span class="s2">del </span><span class="s1">statestack[new_state:]</span>
+                        <span class="s2">elif </span><span class="s1">new_state == </span><span class="s3">'#push'</span><span class="s1">:</span>
+                            <span class="s1">statestack.append(statestack[-</span><span class="s6">1</span><span class="s1">])</span>
+                        <span class="s2">else</span><span class="s1">:</span>
+                            <span class="s2">assert False</span><span class="s1">, </span><span class="s3">f&quot;wrong state def: </span><span class="s4">{</span><span class="s1">new_state</span><span class="s4">!r}</span><span class="s3">&quot;</span>
+                        <span class="s1">statetokens = tokendefs[statestack[-</span><span class="s6">1</span><span class="s1">]]</span>
+                    <span class="s2">break</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s0"># We are here only if all state tokens have been considered</span>
+                <span class="s0"># and there was not a match on any of them.</span>
+                <span class="s2">try</span><span class="s1">:</span>
+                    <span class="s2">if </span><span class="s1">text[pos] == </span><span class="s3">'</span><span class="s4">\n</span><span class="s3">'</span><span class="s1">:</span>
+                        <span class="s0"># at EOL, reset state to &quot;root&quot;</span>
+                        <span class="s1">statestack = [</span><span class="s3">'root'</span><span class="s1">]</span>
+                        <span class="s1">statetokens = tokendefs[</span><span class="s3">'root'</span><span class="s1">]</span>
+                        <span class="s2">yield </span><span class="s1">pos, Whitespace, </span><span class="s3">'</span><span class="s4">\n</span><span class="s3">'</span>
+                        <span class="s1">pos += </span><span class="s6">1</span>
+                        <span class="s2">continue</span>
+                    <span class="s2">yield </span><span class="s1">pos, Error, text[pos]</span>
+                    <span class="s1">pos += </span><span class="s6">1</span>
+                <span class="s2">except </span><span class="s1">IndexError:</span>
+                    <span class="s2">break</span>
+
+
+<span class="s2">class </span><span class="s1">LexerContext:</span>
+    <span class="s0">&quot;&quot;&quot; 
+    A helper object that holds lexer position data. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s2">def </span><span class="s1">__init__(self, text, pos, stack=</span><span class="s2">None</span><span class="s1">, end=</span><span class="s2">None</span><span class="s1">):</span>
+        <span class="s1">self.text = text</span>
+        <span class="s1">self.pos = pos</span>
+        <span class="s1">self.end = end </span><span class="s2">or </span><span class="s1">len(text)  </span><span class="s0"># end=0 not supported ;-)</span>
+        <span class="s1">self.stack = stack </span><span class="s2">or </span><span class="s1">[</span><span class="s3">'root'</span><span class="s1">]</span>
+
+    <span class="s2">def </span><span class="s1">__repr__(self):</span>
+        <span class="s2">return </span><span class="s3">f'LexerContext(</span><span class="s4">{</span><span class="s1">self.text</span><span class="s4">!r}</span><span class="s3">, </span><span class="s4">{</span><span class="s1">self.pos</span><span class="s4">!r}</span><span class="s3">, </span><span class="s4">{</span><span class="s1">self.stack</span><span class="s4">!r}</span><span class="s3">)'</span>
+
+
+<span class="s2">class </span><span class="s1">ExtendedRegexLexer(RegexLexer):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    A RegexLexer that uses a context object to store its state. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s2">def </span><span class="s1">get_tokens_unprocessed(self, text=</span><span class="s2">None</span><span class="s1">, context=</span><span class="s2">None</span><span class="s1">):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        Split ``text`` into (tokentype, text) pairs. 
+        If ``context`` is given, use this lexer context instead. 
+        &quot;&quot;&quot;</span>
+        <span class="s1">tokendefs = self._tokens</span>
+        <span class="s2">if not </span><span class="s1">context:</span>
+            <span class="s1">ctx = LexerContext(text, </span><span class="s6">0</span><span class="s1">)</span>
+            <span class="s1">statetokens = tokendefs[</span><span class="s3">'root'</span><span class="s1">]</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s1">ctx = context</span>
+            <span class="s1">statetokens = tokendefs[ctx.stack[-</span><span class="s6">1</span><span class="s1">]]</span>
+            <span class="s1">text = ctx.text</span>
+        <span class="s2">while </span><span class="s6">1</span><span class="s1">:</span>
+            <span class="s2">for </span><span class="s1">rexmatch, action, new_state </span><span class="s2">in </span><span class="s1">statetokens:</span>
+                <span class="s1">m = rexmatch(text, ctx.pos, ctx.end)</span>
+                <span class="s2">if </span><span class="s1">m:</span>
+                    <span class="s2">if </span><span class="s1">action </span><span class="s2">is not None</span><span class="s1">:</span>
+                        <span class="s2">if </span><span class="s1">type(action) </span><span class="s2">is </span><span class="s1">_TokenType:</span>
+                            <span class="s2">yield </span><span class="s1">ctx.pos, action, m.group()</span>
+                            <span class="s1">ctx.pos = m.end()</span>
+                        <span class="s2">else</span><span class="s1">:</span>
+                            <span class="s2">yield from </span><span class="s1">action(self, m, ctx)</span>
+                            <span class="s2">if not </span><span class="s1">new_state:</span>
+                                <span class="s0"># altered the state stack?</span>
+                                <span class="s1">statetokens = tokendefs[ctx.stack[-</span><span class="s6">1</span><span class="s1">]]</span>
+                    <span class="s0"># CAUTION: callback must set ctx.pos!</span>
+                    <span class="s2">if </span><span class="s1">new_state </span><span class="s2">is not None</span><span class="s1">:</span>
+                        <span class="s0"># state transition</span>
+                        <span class="s2">if </span><span class="s1">isinstance(new_state, tuple):</span>
+                            <span class="s2">for </span><span class="s1">state </span><span class="s2">in </span><span class="s1">new_state:</span>
+                                <span class="s2">if </span><span class="s1">state == </span><span class="s3">'#pop'</span><span class="s1">:</span>
+                                    <span class="s2">if </span><span class="s1">len(ctx.stack) &gt; </span><span class="s6">1</span><span class="s1">:</span>
+                                        <span class="s1">ctx.stack.pop()</span>
+                                <span class="s2">elif </span><span class="s1">state == </span><span class="s3">'#push'</span><span class="s1">:</span>
+                                    <span class="s1">ctx.stack.append(ctx.stack[-</span><span class="s6">1</span><span class="s1">])</span>
+                                <span class="s2">else</span><span class="s1">:</span>
+                                    <span class="s1">ctx.stack.append(state)</span>
+                        <span class="s2">elif </span><span class="s1">isinstance(new_state, int):</span>
+                            <span class="s0"># see RegexLexer for why this check is made</span>
+                            <span class="s2">if </span><span class="s1">abs(new_state) &gt;= len(ctx.stack):</span>
+                                <span class="s2">del </span><span class="s1">ctx.stack[</span><span class="s6">1</span><span class="s1">:]</span>
+                            <span class="s2">else</span><span class="s1">:</span>
+                                <span class="s2">del </span><span class="s1">ctx.stack[new_state:]</span>
+                        <span class="s2">elif </span><span class="s1">new_state == </span><span class="s3">'#push'</span><span class="s1">:</span>
+                            <span class="s1">ctx.stack.append(ctx.stack[-</span><span class="s6">1</span><span class="s1">])</span>
+                        <span class="s2">else</span><span class="s1">:</span>
+                            <span class="s2">assert False</span><span class="s1">, </span><span class="s3">f&quot;wrong state def: </span><span class="s4">{</span><span class="s1">new_state</span><span class="s4">!r}</span><span class="s3">&quot;</span>
+                        <span class="s1">statetokens = tokendefs[ctx.stack[-</span><span class="s6">1</span><span class="s1">]]</span>
+                    <span class="s2">break</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s2">try</span><span class="s1">:</span>
+                    <span class="s2">if </span><span class="s1">ctx.pos &gt;= ctx.end:</span>
+                        <span class="s2">break</span>
+                    <span class="s2">if </span><span class="s1">text[ctx.pos] == </span><span class="s3">'</span><span class="s4">\n</span><span class="s3">'</span><span class="s1">:</span>
+                        <span class="s0"># at EOL, reset state to &quot;root&quot;</span>
+                        <span class="s1">ctx.stack = [</span><span class="s3">'root'</span><span class="s1">]</span>
+                        <span class="s1">statetokens = tokendefs[</span><span class="s3">'root'</span><span class="s1">]</span>
+                        <span class="s2">yield </span><span class="s1">ctx.pos, Text, </span><span class="s3">'</span><span class="s4">\n</span><span class="s3">'</span>
+                        <span class="s1">ctx.pos += </span><span class="s6">1</span>
+                        <span class="s2">continue</span>
+                    <span class="s2">yield </span><span class="s1">ctx.pos, Error, text[ctx.pos]</span>
+                    <span class="s1">ctx.pos += </span><span class="s6">1</span>
+                <span class="s2">except </span><span class="s1">IndexError:</span>
+                    <span class="s2">break</span>
+
+
+<span class="s2">def </span><span class="s1">do_insertions(insertions, tokens):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Helper for lexers which must combine the results of several 
+    sublexers. 
+ 
+    ``insertions`` is a list of ``(index, itokens)`` pairs. 
+    Each ``itokens`` iterable should be inserted at position 
+    ``index`` into the token stream given by the ``tokens`` 
+    argument. 
+ 
+    The result is a combined token stream. 
+ 
+    TODO: clean up the code here. 
+    &quot;&quot;&quot;</span>
+    <span class="s1">insertions = iter(insertions)</span>
+    <span class="s2">try</span><span class="s1">:</span>
+        <span class="s1">index, itokens = next(insertions)</span>
+    <span class="s2">except </span><span class="s1">StopIteration:</span>
+        <span class="s0"># no insertions</span>
+        <span class="s2">yield from </span><span class="s1">tokens</span>
+        <span class="s2">return</span>
+
+    <span class="s1">realpos = </span><span class="s2">None</span>
+    <span class="s1">insleft = </span><span class="s2">True</span>
+
+    <span class="s0"># iterate over the token stream where we want to insert</span>
+    <span class="s0"># the tokens from the insertion list.</span>
+    <span class="s2">for </span><span class="s1">i, t, v </span><span class="s2">in </span><span class="s1">tokens:</span>
+        <span class="s0"># first iteration. store the position of first item</span>
+        <span class="s2">if </span><span class="s1">realpos </span><span class="s2">is None</span><span class="s1">:</span>
+            <span class="s1">realpos = i</span>
+        <span class="s1">oldi = </span><span class="s6">0</span>
+        <span class="s2">while </span><span class="s1">insleft </span><span class="s2">and </span><span class="s1">i + len(v) &gt;= index:</span>
+            <span class="s1">tmpval = v[oldi:index - i]</span>
+            <span class="s2">if </span><span class="s1">tmpval:</span>
+                <span class="s2">yield </span><span class="s1">realpos, t, tmpval</span>
+                <span class="s1">realpos += len(tmpval)</span>
+            <span class="s2">for </span><span class="s1">it_index, it_token, it_value </span><span class="s2">in </span><span class="s1">itokens:</span>
+                <span class="s2">yield </span><span class="s1">realpos, it_token, it_value</span>
+                <span class="s1">realpos += len(it_value)</span>
+            <span class="s1">oldi = index - i</span>
+            <span class="s2">try</span><span class="s1">:</span>
+                <span class="s1">index, itokens = next(insertions)</span>
+            <span class="s2">except </span><span class="s1">StopIteration:</span>
+                <span class="s1">insleft = </span><span class="s2">False</span>
+                <span class="s2">break  </span><span class="s0"># not strictly necessary</span>
+        <span class="s2">if </span><span class="s1">oldi &lt; len(v):</span>
+            <span class="s2">yield </span><span class="s1">realpos, t, v[oldi:]</span>
+            <span class="s1">realpos += len(v) - oldi</span>
+
+    <span class="s0"># leftover tokens</span>
+    <span class="s2">while </span><span class="s1">insleft:</span>
+        <span class="s0"># no normal tokens, set realpos to zero</span>
+        <span class="s1">realpos = realpos </span><span class="s2">or </span><span class="s6">0</span>
+        <span class="s2">for </span><span class="s1">p, t, v </span><span class="s2">in </span><span class="s1">itokens:</span>
+            <span class="s2">yield </span><span class="s1">realpos, t, v</span>
+            <span class="s1">realpos += len(v)</span>
+        <span class="s2">try</span><span class="s1">:</span>
+            <span class="s1">index, itokens = next(insertions)</span>
+        <span class="s2">except </span><span class="s1">StopIteration:</span>
+            <span class="s1">insleft = </span><span class="s2">False</span>
+            <span class="s2">break  </span><span class="s0"># not strictly necessary</span>
+
+
+<span class="s2">class </span><span class="s1">ProfilingRegexLexerMeta(RegexLexerMeta):</span>
+    <span class="s0">&quot;&quot;&quot;Metaclass for ProfilingRegexLexer, collects regex timing info.&quot;&quot;&quot;</span>
+
+    <span class="s2">def </span><span class="s1">_process_regex(cls, regex, rflags, state):</span>
+        <span class="s2">if </span><span class="s1">isinstance(regex, words):</span>
+            <span class="s1">rex = regex_opt(regex.words, prefix=regex.prefix,</span>
+                            <span class="s1">suffix=regex.suffix)</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s1">rex = regex</span>
+        <span class="s1">compiled = re.compile(rex, rflags)</span>
+
+        <span class="s2">def </span><span class="s1">match_func(text, pos, endpos=sys.maxsize):</span>
+            <span class="s1">info = cls._prof_data[-</span><span class="s6">1</span><span class="s1">].setdefault((state, rex), [</span><span class="s6">0</span><span class="s1">, </span><span class="s6">0.0</span><span class="s1">])</span>
+            <span class="s1">t0 = time.time()</span>
+            <span class="s1">res = compiled.match(text, pos, endpos)</span>
+            <span class="s1">t1 = time.time()</span>
+            <span class="s1">info[</span><span class="s6">0</span><span class="s1">] += </span><span class="s6">1</span>
+            <span class="s1">info[</span><span class="s6">1</span><span class="s1">] += t1 - t0</span>
+            <span class="s2">return </span><span class="s1">res</span>
+        <span class="s2">return </span><span class="s1">match_func</span>
+
+
+<span class="s2">class </span><span class="s1">ProfilingRegexLexer(RegexLexer, metaclass=ProfilingRegexLexerMeta):</span>
+    <span class="s0">&quot;&quot;&quot;Drop-in replacement for RegexLexer that does profiling of its regexes.&quot;&quot;&quot;</span>
+
+    <span class="s1">_prof_data = []</span>
+    <span class="s1">_prof_sort_index = </span><span class="s6">4  </span><span class="s0"># defaults to time per call</span>
+
+    <span class="s2">def </span><span class="s1">get_tokens_unprocessed(self, text, stack=(</span><span class="s3">'root'</span><span class="s1">,)):</span>
+        <span class="s0"># this needs to be a stack, since using(this) will produce nested calls</span>
+        <span class="s1">self.__class__._prof_data.append({})</span>
+        <span class="s2">yield from </span><span class="s1">RegexLexer.get_tokens_unprocessed(self, text, stack)</span>
+        <span class="s1">rawdata = self.__class__._prof_data.pop()</span>
+        <span class="s1">data = sorted(((s, repr(r).strip(</span><span class="s3">'u</span><span class="s4">\'</span><span class="s3">'</span><span class="s1">).replace(</span><span class="s3">'</span><span class="s4">\\\\</span><span class="s3">'</span><span class="s1">, </span><span class="s3">'</span><span class="s4">\\</span><span class="s3">'</span><span class="s1">)[:</span><span class="s6">65</span><span class="s1">],</span>
+                        <span class="s1">n, </span><span class="s6">1000 </span><span class="s1">* t, </span><span class="s6">1000 </span><span class="s1">* t / n)</span>
+                       <span class="s2">for </span><span class="s1">((s, r), (n, t)) </span><span class="s2">in </span><span class="s1">rawdata.items()),</span>
+                      <span class="s1">key=</span><span class="s2">lambda </span><span class="s1">x: x[self._prof_sort_index],</span>
+                      <span class="s1">reverse=</span><span class="s2">True</span><span class="s1">)</span>
+        <span class="s1">sum_total = sum(x[</span><span class="s6">3</span><span class="s1">] </span><span class="s2">for </span><span class="s1">x </span><span class="s2">in </span><span class="s1">data)</span>
+
+        <span class="s1">print()</span>
+        <span class="s1">print(</span><span class="s3">'Profiling result for %s lexing %d chars in %.3f ms' </span><span class="s1">%</span>
+              <span class="s1">(self.__class__.__name__, len(text), sum_total))</span>
+        <span class="s1">print(</span><span class="s3">'=' </span><span class="s1">* </span><span class="s6">110</span><span class="s1">)</span>
+        <span class="s1">print(</span><span class="s3">'%-20s %-64s ncalls  tottime  percall' </span><span class="s1">% (</span><span class="s3">'state'</span><span class="s1">, </span><span class="s3">'regex'</span><span class="s1">))</span>
+        <span class="s1">print(</span><span class="s3">'-' </span><span class="s1">* </span><span class="s6">110</span><span class="s1">)</span>
+        <span class="s2">for </span><span class="s1">d </span><span class="s2">in </span><span class="s1">data:</span>
+            <span class="s1">print(</span><span class="s3">'%-20s %-65s %5d %8.4f %8.4f' </span><span class="s1">% d)</span>
+        <span class="s1">print(</span><span class="s3">'=' </span><span class="s1">* </span><span class="s6">110</span><span class="s1">)</span>
+</pre>
+</body>
+</html>

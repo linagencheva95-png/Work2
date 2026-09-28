@@ -1,0 +1,131 @@
+<html>
+<head>
+<title>emscripten_fetch_worker.js</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #0033b3;}
+.s1 { color: #080808;}
+.s2 { color: #1750eb;}
+.s3 { color: #067d17;}
+.s4 { color: #8c8c8c; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+emscripten_fetch_worker.js</font>
+</center></td></tr></table>
+<pre><span class="s0">let </span><span class="s1">Status = {</span>
+  <span class="s1">SUCCESS_HEADER: -</span><span class="s2">1</span><span class="s1">,</span>
+  <span class="s1">SUCCESS_EOF: -</span><span class="s2">2</span><span class="s1">,</span>
+  <span class="s1">ERROR_TIMEOUT: -</span><span class="s2">3</span><span class="s1">,</span>
+  <span class="s1">ERROR_EXCEPTION: -</span><span class="s2">4</span><span class="s1">,</span>
+<span class="s1">};</span>
+
+<span class="s0">let </span><span class="s1">connections = </span><span class="s0">new </span><span class="s1">Map();</span>
+<span class="s0">let </span><span class="s1">nextConnectionID = </span><span class="s2">1</span><span class="s1">;</span>
+<span class="s0">const </span><span class="s1">encoder = </span><span class="s0">new </span><span class="s1">TextEncoder();</span>
+
+<span class="s1">self.addEventListener(</span><span class="s3">&quot;message&quot;</span><span class="s1">, async </span><span class="s0">function </span><span class="s1">(event) {</span>
+  <span class="s0">if </span><span class="s1">(event.data.close) {</span>
+    <span class="s0">let </span><span class="s1">connectionID = event.data.close;</span>
+    <span class="s1">connections.delete(connectionID);</span>
+    <span class="s0">return</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s0">else if </span><span class="s1">(event.data.getMore) {</span>
+    <span class="s0">let </span><span class="s1">connectionID = event.data.getMore;</span>
+    <span class="s0">let </span><span class="s1">{ curOffset, value, reader, intBuffer, byteBuffer } =</span>
+      <span class="s1">connections.get(connectionID);</span>
+    <span class="s4">// if we still have some in buffer, then just send it back straight away</span>
+    <span class="s0">if </span><span class="s1">(!value || curOffset &gt;= value.length) {</span>
+      <span class="s4">// read another buffer if required</span>
+      <span class="s0">try </span><span class="s1">{</span>
+        <span class="s0">let </span><span class="s1">readResponse = </span><span class="s0">await </span><span class="s1">reader.read();</span>
+
+        <span class="s0">if </span><span class="s1">(readResponse.done) {</span>
+          <span class="s4">// read everything - clear connection and return</span>
+          <span class="s1">connections.delete(connectionID);</span>
+          <span class="s1">Atomics.store(intBuffer, </span><span class="s2">0</span><span class="s1">, Status.SUCCESS_EOF);</span>
+          <span class="s1">Atomics.notify(intBuffer, </span><span class="s2">0</span><span class="s1">);</span>
+          <span class="s4">// finished reading successfully</span>
+          <span class="s4">// return from event handler</span>
+          <span class="s0">return</span><span class="s1">;</span>
+        <span class="s1">}</span>
+        <span class="s1">curOffset = </span><span class="s2">0</span><span class="s1">;</span>
+        <span class="s1">connections.get(connectionID).value = readResponse.value;</span>
+        <span class="s1">value = readResponse.value;</span>
+      <span class="s1">} </span><span class="s0">catch </span><span class="s1">(error) {</span>
+        <span class="s1">console.log(</span><span class="s3">&quot;Request exception:&quot;</span><span class="s1">, error);</span>
+        <span class="s0">let </span><span class="s1">errorBytes = encoder.encode(error.message);</span>
+        <span class="s0">let </span><span class="s1">written = errorBytes.length;</span>
+        <span class="s1">byteBuffer.set(errorBytes);</span>
+        <span class="s1">intBuffer[</span><span class="s2">1</span><span class="s1">] = written;</span>
+        <span class="s1">Atomics.store(intBuffer, </span><span class="s2">0</span><span class="s1">, Status.ERROR_EXCEPTION);</span>
+        <span class="s1">Atomics.notify(intBuffer, </span><span class="s2">0</span><span class="s1">);</span>
+      <span class="s1">}</span>
+    <span class="s1">}</span>
+
+    <span class="s4">// send as much buffer as we can</span>
+    <span class="s0">let </span><span class="s1">curLen = value.length - curOffset;</span>
+    <span class="s0">if </span><span class="s1">(curLen &gt; byteBuffer.length) {</span>
+      <span class="s1">curLen = byteBuffer.length;</span>
+    <span class="s1">}</span>
+    <span class="s1">byteBuffer.set(value.subarray(curOffset, curOffset + curLen), </span><span class="s2">0</span><span class="s1">);</span>
+
+    <span class="s1">Atomics.store(intBuffer, </span><span class="s2">0</span><span class="s1">, curLen); </span><span class="s4">// store current length in bytes</span>
+    <span class="s1">Atomics.notify(intBuffer, </span><span class="s2">0</span><span class="s1">);</span>
+    <span class="s1">curOffset += curLen;</span>
+    <span class="s1">connections.get(connectionID).curOffset = curOffset;</span>
+
+    <span class="s0">return</span><span class="s1">;</span>
+  <span class="s1">} </span><span class="s0">else </span><span class="s1">{</span>
+    <span class="s4">// start fetch</span>
+    <span class="s0">let </span><span class="s1">connectionID = nextConnectionID;</span>
+    <span class="s1">nextConnectionID += </span><span class="s2">1</span><span class="s1">;</span>
+    <span class="s0">const </span><span class="s1">intBuffer = </span><span class="s0">new </span><span class="s1">Int32Array(event.data.buffer);</span>
+    <span class="s0">const </span><span class="s1">byteBuffer = </span><span class="s0">new </span><span class="s1">Uint8Array(event.data.buffer, </span><span class="s2">8</span><span class="s1">);</span>
+    <span class="s0">try </span><span class="s1">{</span>
+      <span class="s0">const </span><span class="s1">response = </span><span class="s0">await </span><span class="s1">fetch(event.data.url, event.data.fetchParams);</span>
+      <span class="s4">// return the headers first via textencoder</span>
+      <span class="s0">var </span><span class="s1">headers = [];</span>
+      <span class="s0">for </span><span class="s1">(</span><span class="s0">const </span><span class="s1">pair of response.headers.entries()) {</span>
+        <span class="s1">headers.push([pair[</span><span class="s2">0</span><span class="s1">], pair[</span><span class="s2">1</span><span class="s1">]]);</span>
+      <span class="s1">}</span>
+      <span class="s0">let </span><span class="s1">headerObj = {</span>
+        <span class="s1">headers: headers,</span>
+        <span class="s1">status: response.status,</span>
+        <span class="s1">connectionID,</span>
+      <span class="s1">};</span>
+      <span class="s0">const </span><span class="s1">headerText = JSON.stringify(headerObj);</span>
+      <span class="s0">let </span><span class="s1">headerBytes = encoder.encode(headerText);</span>
+      <span class="s0">let </span><span class="s1">written = headerBytes.length;</span>
+      <span class="s1">byteBuffer.set(headerBytes);</span>
+      <span class="s1">intBuffer[</span><span class="s2">1</span><span class="s1">] = written;</span>
+      <span class="s4">// make a connection</span>
+      <span class="s1">connections.set(connectionID, {</span>
+        <span class="s1">reader: response.body.getReader(),</span>
+        <span class="s1">intBuffer: intBuffer,</span>
+        <span class="s1">byteBuffer: byteBuffer,</span>
+        <span class="s1">value: undefined,</span>
+        <span class="s1">curOffset: </span><span class="s2">0</span><span class="s1">,</span>
+      <span class="s1">});</span>
+      <span class="s4">// set header ready</span>
+      <span class="s1">Atomics.store(intBuffer, </span><span class="s2">0</span><span class="s1">, Status.SUCCESS_HEADER);</span>
+      <span class="s1">Atomics.notify(intBuffer, </span><span class="s2">0</span><span class="s1">);</span>
+      <span class="s4">// all fetching after this goes through a new postmessage call with getMore</span>
+      <span class="s4">// this allows for parallel requests</span>
+    <span class="s1">} </span><span class="s0">catch </span><span class="s1">(error) {</span>
+      <span class="s1">console.log(</span><span class="s3">&quot;Request exception:&quot;</span><span class="s1">, error);</span>
+      <span class="s0">let </span><span class="s1">errorBytes = encoder.encode(error.message);</span>
+      <span class="s0">let </span><span class="s1">written = errorBytes.length;</span>
+      <span class="s1">byteBuffer.set(errorBytes);</span>
+      <span class="s1">intBuffer[</span><span class="s2">1</span><span class="s1">] = written;</span>
+      <span class="s1">Atomics.store(intBuffer, </span><span class="s2">0</span><span class="s1">, Status.ERROR_EXCEPTION);</span>
+      <span class="s1">Atomics.notify(intBuffer, </span><span class="s2">0</span><span class="s1">);</span>
+    <span class="s1">}</span>
+  <span class="s1">}</span>
+<span class="s1">});</span>
+<span class="s1">self.postMessage({ inited: </span><span class="s0">true </span><span class="s1">});</span>
+</pre>
+</body>
+</html>

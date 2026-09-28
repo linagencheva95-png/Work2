@@ -1,0 +1,1129 @@
+<html>
+<head>
+<title>compat.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #8c8c8c; font-style: italic;}
+.s1 { color: #080808;}
+.s2 { color: #0033b3;}
+.s3 { color: #1750eb;}
+.s4 { color: #067d17;}
+.s5 { color: #8a822d;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+compat.py</font>
+</center></td></tr></table>
+<pre><span class="s0"># -*- coding: utf-8 -*-</span>
+<span class="s0">#</span>
+<span class="s0"># Copyright (C) 2013-2026 Vinay Sajip.</span>
+<span class="s0"># Licensed to the Python Software Foundation under a contributor agreement.</span>
+<span class="s0"># See LICENSE.txt and CONTRIBUTORS.txt.</span>
+<span class="s0">#</span>
+<span class="s2">from </span><span class="s1">__future__ </span><span class="s2">import </span><span class="s1">absolute_import</span>
+
+<span class="s2">import </span><span class="s1">os</span>
+<span class="s2">import </span><span class="s1">re</span>
+<span class="s2">import </span><span class="s1">shutil</span>
+<span class="s2">import </span><span class="s1">sys</span>
+
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s2">import </span><span class="s1">ssl</span>
+<span class="s2">except </span><span class="s1">ImportError:  </span><span class="s0"># pragma: no cover</span>
+    <span class="s1">ssl = </span><span class="s2">None</span>
+
+<span class="s2">if </span><span class="s1">sys.version_info[</span><span class="s3">0</span><span class="s1">] &lt; </span><span class="s3">3</span><span class="s1">:  </span><span class="s0"># pragma: no cover</span>
+    <span class="s2">from </span><span class="s1">StringIO </span><span class="s2">import </span><span class="s1">StringIO</span>
+    <span class="s1">string_types = basestring,</span>
+    <span class="s1">text_type = unicode</span>
+    <span class="s2">from </span><span class="s1">types </span><span class="s2">import </span><span class="s1">FileType </span><span class="s2">as </span><span class="s1">file_type</span>
+    <span class="s2">import </span><span class="s1">__builtin__ </span><span class="s2">as </span><span class="s1">builtins</span>
+    <span class="s2">import </span><span class="s1">ConfigParser </span><span class="s2">as </span><span class="s1">configparser</span>
+    <span class="s2">from </span><span class="s1">urlparse </span><span class="s2">import </span><span class="s1">urlparse, urlunparse, urljoin, urlsplit, urlunsplit</span>
+    <span class="s2">from </span><span class="s1">urllib </span><span class="s2">import </span><span class="s1">(urlretrieve, quote </span><span class="s2">as </span><span class="s1">_quote, unquote, url2pathname, pathname2url, ContentTooShortError,</span>
+                        <span class="s1">splittype)</span>
+
+    <span class="s2">def </span><span class="s1">quote(s):</span>
+        <span class="s2">if </span><span class="s1">isinstance(s, unicode):</span>
+            <span class="s1">s = s.encode(</span><span class="s4">'utf-8'</span><span class="s1">)</span>
+        <span class="s2">return </span><span class="s1">_quote(s)</span>
+
+    <span class="s2">import </span><span class="s1">urllib2</span>
+    <span class="s2">from </span><span class="s1">urllib2 </span><span class="s2">import </span><span class="s1">(Request, urlopen, URLError, HTTPError, HTTPBasicAuthHandler, HTTPPasswordMgr, HTTPHandler,</span>
+                         <span class="s1">HTTPRedirectHandler, build_opener)</span>
+    <span class="s2">if </span><span class="s1">ssl:</span>
+        <span class="s2">from </span><span class="s1">urllib2 </span><span class="s2">import </span><span class="s1">HTTPSHandler</span>
+    <span class="s2">import </span><span class="s1">httplib</span>
+    <span class="s2">import </span><span class="s1">xmlrpclib</span>
+    <span class="s2">import </span><span class="s1">Queue </span><span class="s2">as </span><span class="s1">queue</span>
+    <span class="s2">from </span><span class="s1">HTMLParser </span><span class="s2">import </span><span class="s1">HTMLParser</span>
+    <span class="s2">import </span><span class="s1">htmlentitydefs</span>
+    <span class="s1">raw_input = raw_input</span>
+    <span class="s2">from </span><span class="s1">itertools </span><span class="s2">import </span><span class="s1">ifilter </span><span class="s2">as </span><span class="s1">filter</span>
+    <span class="s2">from </span><span class="s1">itertools </span><span class="s2">import </span><span class="s1">ifilterfalse </span><span class="s2">as </span><span class="s1">filterfalse</span>
+
+    <span class="s0"># Leaving this around for now, in case it needs resurrecting in some way</span>
+    <span class="s0"># _userprog = None</span>
+    <span class="s0"># def splituser(host):</span>
+    <span class="s0"># &quot;&quot;&quot;splituser('user[:passwd]@host[:port]') --&gt; 'user[:passwd]', 'host[:port]'.&quot;&quot;&quot;</span>
+    <span class="s0"># global _userprog</span>
+    <span class="s0"># if _userprog is None:</span>
+    <span class="s0"># import re</span>
+    <span class="s0"># _userprog = re.compile('^(.*)@(.*)$')</span>
+
+    <span class="s0"># match = _userprog.match(host)</span>
+    <span class="s0"># if match: return match.group(1, 2)</span>
+    <span class="s0"># return None, host</span>
+
+<span class="s2">else</span><span class="s1">:  </span><span class="s0"># pragma: no cover</span>
+    <span class="s2">from </span><span class="s1">io </span><span class="s2">import </span><span class="s1">StringIO</span>
+    <span class="s1">string_types = str,</span>
+    <span class="s1">text_type = str</span>
+    <span class="s2">from </span><span class="s1">io </span><span class="s2">import </span><span class="s1">TextIOWrapper </span><span class="s2">as </span><span class="s1">file_type</span>
+    <span class="s2">import </span><span class="s1">builtins</span>
+    <span class="s2">import </span><span class="s1">configparser</span>
+    <span class="s2">from </span><span class="s1">urllib.parse </span><span class="s2">import </span><span class="s1">(urlparse, urlunparse, urljoin, quote, unquote, urlsplit, urlunsplit, splittype)</span>
+    <span class="s2">from </span><span class="s1">urllib.request </span><span class="s2">import </span><span class="s1">(urlopen, urlretrieve, Request, url2pathname, pathname2url, HTTPBasicAuthHandler,</span>
+                                <span class="s1">HTTPPasswordMgr, HTTPHandler, HTTPRedirectHandler, build_opener)</span>
+    <span class="s2">if </span><span class="s1">ssl:</span>
+        <span class="s2">from </span><span class="s1">urllib.request </span><span class="s2">import </span><span class="s1">HTTPSHandler</span>
+    <span class="s2">from </span><span class="s1">urllib.error </span><span class="s2">import </span><span class="s1">HTTPError, URLError, ContentTooShortError</span>
+    <span class="s2">import </span><span class="s1">http.client </span><span class="s2">as </span><span class="s1">httplib</span>
+    <span class="s2">import </span><span class="s1">urllib.request </span><span class="s2">as </span><span class="s1">urllib2</span>
+    <span class="s2">import </span><span class="s1">xmlrpc.client </span><span class="s2">as </span><span class="s1">xmlrpclib</span>
+    <span class="s2">import </span><span class="s1">queue</span>
+    <span class="s2">from </span><span class="s1">html.parser </span><span class="s2">import </span><span class="s1">HTMLParser</span>
+    <span class="s2">import </span><span class="s1">html.entities </span><span class="s2">as </span><span class="s1">htmlentitydefs</span>
+    <span class="s1">raw_input = input</span>
+    <span class="s2">from </span><span class="s1">itertools </span><span class="s2">import </span><span class="s1">filterfalse</span>
+    <span class="s1">filter = filter</span>
+
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s2">from </span><span class="s1">ssl </span><span class="s2">import </span><span class="s1">match_hostname, CertificateError</span>
+<span class="s2">except </span><span class="s1">ImportError:  </span><span class="s0"># pragma: no cover</span>
+
+    <span class="s2">class </span><span class="s1">CertificateError(ValueError):</span>
+        <span class="s2">pass</span>
+
+    <span class="s2">def </span><span class="s1">_dnsname_match(dn, hostname, max_wildcards=</span><span class="s3">1</span><span class="s1">):</span>
+        <span class="s0">&quot;&quot;&quot;Matching according to RFC 6125, section 6.4.3 
+ 
+        http://tools.ietf.org/html/rfc6125#section-6.4.3 
+        &quot;&quot;&quot;</span>
+        <span class="s1">pats = []</span>
+        <span class="s2">if not </span><span class="s1">dn:</span>
+            <span class="s2">return False</span>
+
+        <span class="s1">parts = dn.split(</span><span class="s4">'.'</span><span class="s1">)</span>
+        <span class="s1">leftmost, remainder = parts[</span><span class="s3">0</span><span class="s1">], parts[</span><span class="s3">1</span><span class="s1">:]</span>
+
+        <span class="s1">wildcards = leftmost.count(</span><span class="s4">'*'</span><span class="s1">)</span>
+        <span class="s2">if </span><span class="s1">wildcards &gt; max_wildcards:</span>
+            <span class="s0"># Issue #17980: avoid denials of service by refusing more</span>
+            <span class="s0"># than one wildcard per fragment.  A survey of established</span>
+            <span class="s0"># policy among SSL implementations showed it to be a</span>
+            <span class="s0"># reasonable choice.</span>
+            <span class="s2">raise </span><span class="s1">CertificateError(</span><span class="s4">'Too many wildcards in certificate DNS name: %r' </span><span class="s1">% dn)</span>
+
+        <span class="s0"># speed up common case w/o wildcards</span>
+        <span class="s2">if not </span><span class="s1">wildcards:</span>
+            <span class="s2">return </span><span class="s1">dn.lower() == hostname.lower()</span>
+
+        <span class="s0"># RFC 6125, section 6.4.3, subitem 1.</span>
+        <span class="s0"># The client SHOULD NOT attempt to match a presented identifier in which</span>
+        <span class="s0"># the wildcard character comprises a label other than the left-most label.</span>
+        <span class="s2">if </span><span class="s1">leftmost == </span><span class="s4">'*'</span><span class="s1">:</span>
+            <span class="s0"># When '*' is a fragment by itself, it matches a non-empty dotless</span>
+            <span class="s0"># fragment.</span>
+            <span class="s1">pats.append(</span><span class="s4">'[^.]+'</span><span class="s1">)</span>
+        <span class="s2">elif </span><span class="s1">leftmost.startswith(</span><span class="s4">'xn--'</span><span class="s1">) </span><span class="s2">or </span><span class="s1">hostname.startswith(</span><span class="s4">'xn--'</span><span class="s1">):</span>
+            <span class="s0"># RFC 6125, section 6.4.3, subitem 3.</span>
+            <span class="s0"># The client SHOULD NOT attempt to match a presented identifier</span>
+            <span class="s0"># where the wildcard character is embedded within an A-label or</span>
+            <span class="s0"># U-label of an internationalized domain name.</span>
+            <span class="s1">pats.append(re.escape(leftmost))</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s0"># Otherwise, '*' matches any dotless string, e.g. www*</span>
+            <span class="s1">pats.append(re.escape(leftmost).replace(</span><span class="s4">r'\*'</span><span class="s1">, </span><span class="s4">'[^.]*'</span><span class="s1">))</span>
+
+        <span class="s0"># add the remaining fragments, ignore any wildcards</span>
+        <span class="s2">for </span><span class="s1">frag </span><span class="s2">in </span><span class="s1">remainder:</span>
+            <span class="s1">pats.append(re.escape(frag))</span>
+
+        <span class="s1">pat = re.compile(</span><span class="s4">r'\A' </span><span class="s1">+ </span><span class="s4">r'\.'</span><span class="s1">.join(pats) + </span><span class="s4">r'\Z'</span><span class="s1">, re.IGNORECASE)</span>
+        <span class="s2">return </span><span class="s1">pat.match(hostname)</span>
+
+    <span class="s2">def </span><span class="s1">match_hostname(cert, hostname):</span>
+        <span class="s0">&quot;&quot;&quot;Verify that *cert* (in decoded format as returned by 
+        SSLSocket.getpeercert()) matches the *hostname*.  RFC 2818 and RFC 6125 
+        rules are followed, but IP addresses are not accepted for *hostname*. 
+ 
+        CertificateError is raised on failure. On success, the function 
+        returns nothing. 
+        &quot;&quot;&quot;</span>
+        <span class="s2">if not </span><span class="s1">cert:</span>
+            <span class="s2">raise </span><span class="s1">ValueError(</span><span class="s4">&quot;empty or no certificate, match_hostname needs a &quot;</span>
+                             <span class="s4">&quot;SSL socket or SSL context with either &quot;</span>
+                             <span class="s4">&quot;CERT_OPTIONAL or CERT_REQUIRED&quot;</span><span class="s1">)</span>
+        <span class="s1">dnsnames = []</span>
+        <span class="s1">san = cert.get(</span><span class="s4">'subjectAltName'</span><span class="s1">, ())</span>
+        <span class="s2">for </span><span class="s1">key, value </span><span class="s2">in </span><span class="s1">san:</span>
+            <span class="s2">if </span><span class="s1">key == </span><span class="s4">'DNS'</span><span class="s1">:</span>
+                <span class="s2">if </span><span class="s1">_dnsname_match(value, hostname):</span>
+                    <span class="s2">return</span>
+                <span class="s1">dnsnames.append(value)</span>
+        <span class="s2">if not </span><span class="s1">dnsnames:</span>
+            <span class="s0"># The subject is only checked when there is no dNSName entry</span>
+            <span class="s0"># in subjectAltName</span>
+            <span class="s2">for </span><span class="s1">sub </span><span class="s2">in </span><span class="s1">cert.get(</span><span class="s4">'subject'</span><span class="s1">, ()):</span>
+                <span class="s2">for </span><span class="s1">key, value </span><span class="s2">in </span><span class="s1">sub:</span>
+                    <span class="s0"># XXX according to RFC 2818, the most specific Common Name</span>
+                    <span class="s0"># must be used.</span>
+                    <span class="s2">if </span><span class="s1">key == </span><span class="s4">'commonName'</span><span class="s1">:</span>
+                        <span class="s2">if </span><span class="s1">_dnsname_match(value, hostname):</span>
+                            <span class="s2">return</span>
+                        <span class="s1">dnsnames.append(value)</span>
+        <span class="s2">if </span><span class="s1">len(dnsnames) &gt; </span><span class="s3">1</span><span class="s1">:</span>
+            <span class="s2">raise </span><span class="s1">CertificateError(</span><span class="s4">&quot;hostname %r &quot;</span>
+                                   <span class="s4">&quot;doesn't match either of %s&quot; </span><span class="s1">% (hostname, </span><span class="s4">', '</span><span class="s1">.join(map(repr, dnsnames))))</span>
+        <span class="s2">elif </span><span class="s1">len(dnsnames) == </span><span class="s3">1</span><span class="s1">:</span>
+            <span class="s2">raise </span><span class="s1">CertificateError(</span><span class="s4">&quot;hostname %r &quot;</span>
+                                   <span class="s4">&quot;doesn't match %r&quot; </span><span class="s1">% (hostname, dnsnames[</span><span class="s3">0</span><span class="s1">]))</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s2">raise </span><span class="s1">CertificateError(</span><span class="s4">&quot;no appropriate commonName or &quot;</span>
+                                   <span class="s4">&quot;subjectAltName fields were found&quot;</span><span class="s1">)</span>
+
+
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s2">from </span><span class="s1">types </span><span class="s2">import </span><span class="s1">SimpleNamespace </span><span class="s2">as </span><span class="s1">Container</span>
+<span class="s2">except </span><span class="s1">ImportError:  </span><span class="s0"># pragma: no cover</span>
+
+    <span class="s2">class </span><span class="s1">Container(object):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        A generic container for when multiple values need to be returned 
+        &quot;&quot;&quot;</span>
+
+        <span class="s2">def </span><span class="s1">__init__(self, **kwargs):</span>
+            <span class="s1">self.__dict__.update(kwargs)</span>
+
+
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s2">from </span><span class="s1">shutil </span><span class="s2">import </span><span class="s1">which</span>
+<span class="s2">except </span><span class="s1">ImportError:  </span><span class="s0"># pragma: no cover</span>
+    <span class="s0"># Implementation from Python 3.3</span>
+    <span class="s2">def </span><span class="s1">which(cmd, mode=os.F_OK | os.X_OK, path=</span><span class="s2">None</span><span class="s1">):</span>
+        <span class="s0">&quot;&quot;&quot;Given a command, mode, and a PATH string, return the path which 
+        conforms to the given mode on the PATH, or None if there is no such 
+        file. 
+ 
+        `mode` defaults to os.F_OK | os.X_OK. `path` defaults to the result 
+        of os.environ.get(&quot;PATH&quot;), or can be overridden with a custom search 
+        path. 
+ 
+        &quot;&quot;&quot;</span>
+
+        <span class="s0"># Check that a given file can be accessed with the correct mode.</span>
+        <span class="s0"># Additionally check that `file` is not a directory, as on Windows</span>
+        <span class="s0"># directories pass the os.access check.</span>
+        <span class="s2">def </span><span class="s1">_access_check(fn, mode):</span>
+            <span class="s2">return </span><span class="s1">(os.path.exists(fn) </span><span class="s2">and </span><span class="s1">os.access(fn, mode) </span><span class="s2">and not </span><span class="s1">os.path.isdir(fn))</span>
+
+        <span class="s0"># If we're given a path with a directory part, look it up directly rather</span>
+        <span class="s0"># than referring to PATH directories. This includes checking relative to the</span>
+        <span class="s0"># current directory, e.g. ./script</span>
+        <span class="s2">if </span><span class="s1">os.path.dirname(cmd):</span>
+            <span class="s2">if </span><span class="s1">_access_check(cmd, mode):</span>
+                <span class="s2">return </span><span class="s1">cmd</span>
+            <span class="s2">return None</span>
+
+        <span class="s2">if </span><span class="s1">path </span><span class="s2">is None</span><span class="s1">:</span>
+            <span class="s1">path = os.environ.get(</span><span class="s4">&quot;PATH&quot;</span><span class="s1">, os.defpath)</span>
+        <span class="s2">if not </span><span class="s1">path:</span>
+            <span class="s2">return None</span>
+        <span class="s1">path = path.split(os.pathsep)</span>
+
+        <span class="s2">if </span><span class="s1">sys.platform == </span><span class="s4">&quot;win32&quot;</span><span class="s1">:</span>
+            <span class="s0"># The current directory takes precedence on Windows.</span>
+            <span class="s2">if </span><span class="s1">os.curdir </span><span class="s2">not in </span><span class="s1">path:</span>
+                <span class="s1">path.insert(</span><span class="s3">0</span><span class="s1">, os.curdir)</span>
+
+            <span class="s0"># PATHEXT is necessary to check on Windows.</span>
+            <span class="s1">pathext = os.environ.get(</span><span class="s4">&quot;PATHEXT&quot;</span><span class="s1">, </span><span class="s4">&quot;&quot;</span><span class="s1">).split(os.pathsep)</span>
+            <span class="s0"># See if the given file matches any of the expected path extensions.</span>
+            <span class="s0"># This will allow us to short circuit when given &quot;python.exe&quot;.</span>
+            <span class="s0"># If it does match, only test that one, otherwise we have to try</span>
+            <span class="s0"># others.</span>
+            <span class="s2">if </span><span class="s1">any(cmd.lower().endswith(ext.lower()) </span><span class="s2">for </span><span class="s1">ext </span><span class="s2">in </span><span class="s1">pathext):</span>
+                <span class="s1">files = [cmd]</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s1">files = [cmd + ext </span><span class="s2">for </span><span class="s1">ext </span><span class="s2">in </span><span class="s1">pathext]</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s0"># On other platforms you don't have things like PATHEXT to tell you</span>
+            <span class="s0"># what file suffixes are executable, so just pass on cmd as-is.</span>
+            <span class="s1">files = [cmd]</span>
+
+        <span class="s1">seen = set()</span>
+        <span class="s2">for </span><span class="s1">dir </span><span class="s2">in </span><span class="s1">path:</span>
+            <span class="s1">normdir = os.path.normcase(dir)</span>
+            <span class="s2">if </span><span class="s1">normdir </span><span class="s2">not in </span><span class="s1">seen:</span>
+                <span class="s1">seen.add(normdir)</span>
+                <span class="s2">for </span><span class="s1">thefile </span><span class="s2">in </span><span class="s1">files:</span>
+                    <span class="s1">name = os.path.join(dir, thefile)</span>
+                    <span class="s2">if </span><span class="s1">_access_check(name, mode):</span>
+                        <span class="s2">return </span><span class="s1">name</span>
+        <span class="s2">return None</span>
+
+
+<span class="s0"># ZipFile is a context manager in 2.7, but not in 2.6</span>
+
+<span class="s2">from </span><span class="s1">zipfile </span><span class="s2">import </span><span class="s1">ZipFile </span><span class="s2">as </span><span class="s1">BaseZipFile</span>
+
+<span class="s2">if </span><span class="s1">hasattr(BaseZipFile, </span><span class="s4">'__enter__'</span><span class="s1">):  </span><span class="s0"># pragma: no cover</span>
+    <span class="s1">ZipFile = BaseZipFile</span>
+<span class="s2">else</span><span class="s1">:  </span><span class="s0"># pragma: no cover</span>
+    <span class="s2">from </span><span class="s1">zipfile </span><span class="s2">import </span><span class="s1">ZipExtFile </span><span class="s2">as </span><span class="s1">BaseZipExtFile</span>
+
+    <span class="s2">class </span><span class="s1">ZipExtFile(BaseZipExtFile):</span>
+
+        <span class="s2">def </span><span class="s1">__init__(self, base):</span>
+            <span class="s1">self.__dict__.update(base.__dict__)</span>
+
+        <span class="s2">def </span><span class="s1">__enter__(self):</span>
+            <span class="s2">return </span><span class="s1">self</span>
+
+        <span class="s2">def </span><span class="s1">__exit__(self, *exc_info):</span>
+            <span class="s1">self.close()</span>
+            <span class="s0"># return None, so if an exception occurred, it will propagate</span>
+
+    <span class="s2">class </span><span class="s1">ZipFile(BaseZipFile):</span>
+
+        <span class="s2">def </span><span class="s1">__enter__(self):</span>
+            <span class="s2">return </span><span class="s1">self</span>
+
+        <span class="s2">def </span><span class="s1">__exit__(self, *exc_info):</span>
+            <span class="s1">self.close()</span>
+            <span class="s0"># return None, so if an exception occurred, it will propagate</span>
+
+        <span class="s2">def </span><span class="s1">open(self, *args, **kwargs):</span>
+            <span class="s1">base = BaseZipFile.open(self, *args, **kwargs)</span>
+            <span class="s2">return </span><span class="s1">ZipExtFile(base)</span>
+
+
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s2">from </span><span class="s1">platform </span><span class="s2">import </span><span class="s1">python_implementation</span>
+<span class="s2">except </span><span class="s1">ImportError:  </span><span class="s0"># pragma: no cover</span>
+
+    <span class="s2">def </span><span class="s1">python_implementation():</span>
+        <span class="s0">&quot;&quot;&quot;Return a string identifying the Python implementation.&quot;&quot;&quot;</span>
+        <span class="s2">if </span><span class="s4">'PyPy' </span><span class="s2">in </span><span class="s1">sys.version:</span>
+            <span class="s2">return </span><span class="s4">'PyPy'</span>
+        <span class="s2">if </span><span class="s1">os.name == </span><span class="s4">'java'</span><span class="s1">:</span>
+            <span class="s2">return </span><span class="s4">'Jython'</span>
+        <span class="s2">if </span><span class="s1">sys.version.startswith(</span><span class="s4">'IronPython'</span><span class="s1">):</span>
+            <span class="s2">return </span><span class="s4">'IronPython'</span>
+        <span class="s2">return </span><span class="s4">'CPython'</span>
+
+
+<span class="s2">import </span><span class="s1">sysconfig</span>
+
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s1">callable = callable</span>
+<span class="s2">except </span><span class="s1">NameError:  </span><span class="s0"># pragma: no cover</span>
+    <span class="s2">from </span><span class="s1">collections.abc </span><span class="s2">import </span><span class="s1">Callable</span>
+
+    <span class="s2">def </span><span class="s1">callable(obj):</span>
+        <span class="s2">return </span><span class="s1">isinstance(obj, Callable)</span>
+
+
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s1">fsencode = os.fsencode</span>
+    <span class="s1">fsdecode = os.fsdecode</span>
+<span class="s2">except </span><span class="s1">AttributeError:  </span><span class="s0"># pragma: no cover</span>
+    <span class="s0"># Issue #99: on some systems (e.g. containerised),</span>
+    <span class="s0"># sys.getfilesystemencoding() returns None, and we need a real value,</span>
+    <span class="s0"># so fall back to utf-8. From the CPython 2.7 docs relating to Unix and</span>
+    <span class="s0"># sys.getfilesystemencoding(): the return value is &quot;the user’s preference</span>
+    <span class="s0"># according to the result of nl_langinfo(CODESET), or None if the</span>
+    <span class="s0"># nl_langinfo(CODESET) failed.&quot;</span>
+    <span class="s1">_fsencoding = sys.getfilesystemencoding() </span><span class="s2">or </span><span class="s4">'utf-8'</span>
+    <span class="s2">if </span><span class="s1">_fsencoding == </span><span class="s4">'mbcs'</span><span class="s1">:</span>
+        <span class="s1">_fserrors = </span><span class="s4">'strict'</span>
+    <span class="s2">else</span><span class="s1">:</span>
+        <span class="s1">_fserrors = </span><span class="s4">'surrogateescape'</span>
+
+    <span class="s2">def </span><span class="s1">fsencode(filename):</span>
+        <span class="s2">if </span><span class="s1">isinstance(filename, bytes):</span>
+            <span class="s2">return </span><span class="s1">filename</span>
+        <span class="s2">elif </span><span class="s1">isinstance(filename, text_type):</span>
+            <span class="s2">return </span><span class="s1">filename.encode(_fsencoding, _fserrors)</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s2">raise </span><span class="s1">TypeError(</span><span class="s4">&quot;expect bytes or str, not %s&quot; </span><span class="s1">% type(filename).__name__)</span>
+
+    <span class="s2">def </span><span class="s1">fsdecode(filename):</span>
+        <span class="s2">if </span><span class="s1">isinstance(filename, text_type):</span>
+            <span class="s2">return </span><span class="s1">filename</span>
+        <span class="s2">elif </span><span class="s1">isinstance(filename, bytes):</span>
+            <span class="s2">return </span><span class="s1">filename.decode(_fsencoding, _fserrors)</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s2">raise </span><span class="s1">TypeError(</span><span class="s4">&quot;expect bytes or str, not %s&quot; </span><span class="s1">% type(filename).__name__)</span>
+
+
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s2">from </span><span class="s1">tokenize </span><span class="s2">import </span><span class="s1">detect_encoding</span>
+<span class="s2">except </span><span class="s1">ImportError:  </span><span class="s0"># pragma: no cover</span>
+    <span class="s2">from </span><span class="s1">codecs </span><span class="s2">import </span><span class="s1">BOM_UTF8, lookup</span>
+
+    <span class="s1">cookie_re = re.compile(</span><span class="s4">r&quot;coding[:=]\s*([-\w.]+)&quot;</span><span class="s1">)</span>
+
+    <span class="s2">def </span><span class="s1">_get_normal_name(orig_enc):</span>
+        <span class="s0">&quot;&quot;&quot;Imitates get_normal_name in tokenizer.c.&quot;&quot;&quot;</span>
+        <span class="s0"># Only care about the first 12 characters.</span>
+        <span class="s1">enc = orig_enc[:</span><span class="s3">12</span><span class="s1">].lower().replace(</span><span class="s4">&quot;_&quot;</span><span class="s1">, </span><span class="s4">&quot;-&quot;</span><span class="s1">)</span>
+        <span class="s2">if </span><span class="s1">enc == </span><span class="s4">&quot;utf-8&quot; </span><span class="s2">or </span><span class="s1">enc.startswith(</span><span class="s4">&quot;utf-8-&quot;</span><span class="s1">):</span>
+            <span class="s2">return </span><span class="s4">&quot;utf-8&quot;</span>
+        <span class="s2">if </span><span class="s1">enc </span><span class="s2">in </span><span class="s1">(</span><span class="s4">&quot;latin-1&quot;</span><span class="s1">, </span><span class="s4">&quot;iso-8859-1&quot;</span><span class="s1">, </span><span class="s4">&quot;iso-latin-1&quot;</span><span class="s1">) </span><span class="s2">or </span><span class="s1">\</span>
+           <span class="s1">enc.startswith((</span><span class="s4">&quot;latin-1-&quot;</span><span class="s1">, </span><span class="s4">&quot;iso-8859-1-&quot;</span><span class="s1">, </span><span class="s4">&quot;iso-latin-1-&quot;</span><span class="s1">)):</span>
+            <span class="s2">return </span><span class="s4">&quot;iso-8859-1&quot;</span>
+        <span class="s2">return </span><span class="s1">orig_enc</span>
+
+    <span class="s2">def </span><span class="s1">detect_encoding(readline):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        The detect_encoding() function is used to detect the encoding that should 
+        be used to decode a Python source file.  It requires one argument, readline, 
+        in the same way as the tokenize() generator. 
+ 
+        It will call readline a maximum of twice, and return the encoding used 
+        (as a string) and a list of any lines (left as bytes) it has read in. 
+ 
+        It detects the encoding from the presence of a utf-8 bom or an encoding 
+        cookie as specified in pep-0263.  If both a bom and a cookie are present, 
+        but disagree, a SyntaxError will be raised.  If the encoding cookie is an 
+        invalid charset, raise a SyntaxError.  Note that if a utf-8 bom is found, 
+        'utf-8-sig' is returned. 
+ 
+        If no encoding is specified, then the default of 'utf-8' will be returned. 
+        &quot;&quot;&quot;</span>
+        <span class="s2">try</span><span class="s1">:</span>
+            <span class="s1">filename = readline.__self__.name</span>
+        <span class="s2">except </span><span class="s1">AttributeError:</span>
+            <span class="s1">filename = </span><span class="s2">None</span>
+        <span class="s1">bom_found = </span><span class="s2">False</span>
+        <span class="s1">encoding = </span><span class="s2">None</span>
+        <span class="s1">default = </span><span class="s4">'utf-8'</span>
+
+        <span class="s2">def </span><span class="s1">read_or_stop():</span>
+            <span class="s2">try</span><span class="s1">:</span>
+                <span class="s2">return </span><span class="s1">readline()</span>
+            <span class="s2">except </span><span class="s1">StopIteration:</span>
+                <span class="s2">return </span><span class="s5">b''</span>
+
+        <span class="s2">def </span><span class="s1">find_cookie(line):</span>
+            <span class="s2">try</span><span class="s1">:</span>
+                <span class="s0"># Decode as UTF-8. Either the line is an encoding declaration,</span>
+                <span class="s0"># in which case it should be pure ASCII, or it must be UTF-8</span>
+                <span class="s0"># per default encoding.</span>
+                <span class="s1">line_string = line.decode(</span><span class="s4">'utf-8'</span><span class="s1">)</span>
+            <span class="s2">except </span><span class="s1">UnicodeDecodeError:</span>
+                <span class="s1">msg = </span><span class="s4">&quot;invalid or missing encoding declaration&quot;</span>
+                <span class="s2">if </span><span class="s1">filename </span><span class="s2">is not None</span><span class="s1">:</span>
+                    <span class="s1">msg = </span><span class="s4">'{} for {!r}'</span><span class="s1">.format(msg, filename)</span>
+                <span class="s2">raise </span><span class="s1">SyntaxError(msg)</span>
+
+            <span class="s1">matches = cookie_re.findall(line_string)</span>
+            <span class="s2">if not </span><span class="s1">matches:</span>
+                <span class="s2">return None</span>
+            <span class="s1">encoding = _get_normal_name(matches[</span><span class="s3">0</span><span class="s1">])</span>
+            <span class="s2">try</span><span class="s1">:</span>
+                <span class="s1">codec = lookup(encoding)</span>
+            <span class="s2">except </span><span class="s1">LookupError:</span>
+                <span class="s0"># This behaviour mimics the Python interpreter</span>
+                <span class="s2">if </span><span class="s1">filename </span><span class="s2">is None</span><span class="s1">:</span>
+                    <span class="s1">msg = </span><span class="s4">&quot;unknown encoding: &quot; </span><span class="s1">+ encoding</span>
+                <span class="s2">else</span><span class="s1">:</span>
+                    <span class="s1">msg = </span><span class="s4">&quot;unknown encoding for {!r}: {}&quot;</span><span class="s1">.format(filename, encoding)</span>
+                <span class="s2">raise </span><span class="s1">SyntaxError(msg)</span>
+
+            <span class="s2">if </span><span class="s1">bom_found:</span>
+                <span class="s2">if </span><span class="s1">codec.name != </span><span class="s4">'utf-8'</span><span class="s1">:</span>
+                    <span class="s0"># This behaviour mimics the Python interpreter</span>
+                    <span class="s2">if </span><span class="s1">filename </span><span class="s2">is None</span><span class="s1">:</span>
+                        <span class="s1">msg = </span><span class="s4">'Encoding problem: utf-8'</span>
+                    <span class="s2">else</span><span class="s1">:</span>
+                        <span class="s1">msg = </span><span class="s4">'Encoding problem for %r: utf-8' </span><span class="s1">% filename</span>
+                    <span class="s2">raise </span><span class="s1">SyntaxError(msg)</span>
+                <span class="s1">encoding += </span><span class="s4">'-sig'</span>
+            <span class="s2">return </span><span class="s1">encoding</span>
+
+        <span class="s1">first = read_or_stop()</span>
+        <span class="s2">if </span><span class="s1">first.startswith(BOM_UTF8):</span>
+            <span class="s1">bom_found = </span><span class="s2">True</span>
+            <span class="s1">first = first[</span><span class="s3">3</span><span class="s1">:]</span>
+            <span class="s1">default = </span><span class="s4">'utf-8-sig'</span>
+        <span class="s2">if not </span><span class="s1">first:</span>
+            <span class="s2">return </span><span class="s1">default, []</span>
+
+        <span class="s1">encoding = find_cookie(first)</span>
+        <span class="s2">if </span><span class="s1">encoding:</span>
+            <span class="s2">return </span><span class="s1">encoding, [first]</span>
+
+        <span class="s1">second = read_or_stop()</span>
+        <span class="s2">if not </span><span class="s1">second:</span>
+            <span class="s2">return </span><span class="s1">default, [first]</span>
+
+        <span class="s1">encoding = find_cookie(second)</span>
+        <span class="s2">if </span><span class="s1">encoding:</span>
+            <span class="s2">return </span><span class="s1">encoding, [first, second]</span>
+
+        <span class="s2">return </span><span class="s1">default, [first, second]</span>
+
+
+<span class="s0"># For converting &amp; &lt;-&gt; &amp;amp; etc.</span>
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s2">from </span><span class="s1">html </span><span class="s2">import </span><span class="s1">escape</span>
+<span class="s2">except </span><span class="s1">ImportError:</span>
+    <span class="s2">from </span><span class="s1">cgi </span><span class="s2">import </span><span class="s1">escape</span>
+<span class="s2">if </span><span class="s1">sys.version_info[:</span><span class="s3">2</span><span class="s1">] &lt; (</span><span class="s3">3</span><span class="s1">, </span><span class="s3">4</span><span class="s1">):</span>
+    <span class="s1">unescape = HTMLParser().unescape</span>
+<span class="s2">else</span><span class="s1">:</span>
+    <span class="s2">from </span><span class="s1">html </span><span class="s2">import </span><span class="s1">unescape</span>
+
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s2">from </span><span class="s1">collections </span><span class="s2">import </span><span class="s1">ChainMap</span>
+<span class="s2">except </span><span class="s1">ImportError:  </span><span class="s0"># pragma: no cover</span>
+    <span class="s2">from </span><span class="s1">collections </span><span class="s2">import </span><span class="s1">MutableMapping</span>
+
+    <span class="s2">try</span><span class="s1">:</span>
+        <span class="s2">from </span><span class="s1">reprlib </span><span class="s2">import </span><span class="s1">recursive_repr </span><span class="s2">as </span><span class="s1">_recursive_repr</span>
+    <span class="s2">except </span><span class="s1">ImportError:</span>
+
+        <span class="s2">def </span><span class="s1">_recursive_repr(fillvalue=</span><span class="s4">'...'</span><span class="s1">):</span>
+            <span class="s0">''' 
+            Decorator to make a repr function return fillvalue for a recursive 
+            call 
+            '''</span>
+
+            <span class="s2">def </span><span class="s1">decorating_function(user_function):</span>
+                <span class="s1">repr_running = set()</span>
+
+                <span class="s2">def </span><span class="s1">wrapper(self):</span>
+                    <span class="s1">key = id(self), get_ident()</span>
+                    <span class="s2">if </span><span class="s1">key </span><span class="s2">in </span><span class="s1">repr_running:</span>
+                        <span class="s2">return </span><span class="s1">fillvalue</span>
+                    <span class="s1">repr_running.add(key)</span>
+                    <span class="s2">try</span><span class="s1">:</span>
+                        <span class="s1">result = user_function(self)</span>
+                    <span class="s2">finally</span><span class="s1">:</span>
+                        <span class="s1">repr_running.discard(key)</span>
+                    <span class="s2">return </span><span class="s1">result</span>
+
+                <span class="s0"># Can't use functools.wraps() here because of bootstrap issues</span>
+                <span class="s1">wrapper.__module__ = getattr(user_function, </span><span class="s4">'__module__'</span><span class="s1">)</span>
+                <span class="s1">wrapper.__doc__ = getattr(user_function, </span><span class="s4">'__doc__'</span><span class="s1">)</span>
+                <span class="s1">wrapper.__name__ = getattr(user_function, </span><span class="s4">'__name__'</span><span class="s1">)</span>
+                <span class="s1">wrapper.__annotations__ = getattr(user_function, </span><span class="s4">'__annotations__'</span><span class="s1">, {})</span>
+                <span class="s2">return </span><span class="s1">wrapper</span>
+
+            <span class="s2">return </span><span class="s1">decorating_function</span>
+
+    <span class="s2">class </span><span class="s1">ChainMap(MutableMapping):</span>
+        <span class="s0">''' 
+        A ChainMap groups multiple dicts (or other mappings) together 
+        to create a single, updateable view. 
+ 
+        The underlying mappings are stored in a list.  That list is public and can 
+        accessed or updated using the *maps* attribute.  There is no other state. 
+ 
+        Lookups search the underlying mappings successively until a key is found. 
+        In contrast, writes, updates, and deletions only operate on the first 
+        mapping. 
+        '''</span>
+
+        <span class="s2">def </span><span class="s1">__init__(self, *maps):</span>
+            <span class="s0">'''Initialize a ChainMap by setting *maps* to the given mappings. 
+            If no mappings are provided, a single empty dictionary is used. 
+ 
+            '''</span>
+            <span class="s1">self.maps = list(maps) </span><span class="s2">or </span><span class="s1">[{}]  </span><span class="s0"># always at least one map</span>
+
+        <span class="s2">def </span><span class="s1">__missing__(self, key):</span>
+            <span class="s2">raise </span><span class="s1">KeyError(key)</span>
+
+        <span class="s2">def </span><span class="s1">__getitem__(self, key):</span>
+            <span class="s2">for </span><span class="s1">mapping </span><span class="s2">in </span><span class="s1">self.maps:</span>
+                <span class="s2">try</span><span class="s1">:</span>
+                    <span class="s2">return </span><span class="s1">mapping[key]  </span><span class="s0"># can't use 'key in mapping' with defaultdict</span>
+                <span class="s2">except </span><span class="s1">KeyError:</span>
+                    <span class="s2">pass</span>
+            <span class="s2">return </span><span class="s1">self.__missing__(key)  </span><span class="s0"># support subclasses that define __missing__</span>
+
+        <span class="s2">def </span><span class="s1">get(self, key, default=</span><span class="s2">None</span><span class="s1">):</span>
+            <span class="s2">return </span><span class="s1">self[key] </span><span class="s2">if </span><span class="s1">key </span><span class="s2">in </span><span class="s1">self </span><span class="s2">else </span><span class="s1">default</span>
+
+        <span class="s2">def </span><span class="s1">__len__(self):</span>
+            <span class="s2">return </span><span class="s1">len(set().union(*self.maps))  </span><span class="s0"># reuses stored hash values if possible</span>
+
+        <span class="s2">def </span><span class="s1">__iter__(self):</span>
+            <span class="s2">return </span><span class="s1">iter(set().union(*self.maps))</span>
+
+        <span class="s2">def </span><span class="s1">__contains__(self, key):</span>
+            <span class="s2">return </span><span class="s1">any(key </span><span class="s2">in </span><span class="s1">m </span><span class="s2">for </span><span class="s1">m </span><span class="s2">in </span><span class="s1">self.maps)</span>
+
+        <span class="s2">def </span><span class="s1">__bool__(self):</span>
+            <span class="s2">return </span><span class="s1">any(self.maps)</span>
+
+        <span class="s1">@_recursive_repr()</span>
+        <span class="s2">def </span><span class="s1">__repr__(self):</span>
+            <span class="s2">return </span><span class="s4">'{0.__class__.__name__}({1})'</span><span class="s1">.format(self, </span><span class="s4">', '</span><span class="s1">.join(map(repr, self.maps)))</span>
+
+        <span class="s1">@classmethod</span>
+        <span class="s2">def </span><span class="s1">fromkeys(cls, iterable, *args):</span>
+            <span class="s0">'Create a ChainMap with a single dict created from the iterable.'</span>
+            <span class="s2">return </span><span class="s1">cls(dict.fromkeys(iterable, *args))</span>
+
+        <span class="s2">def </span><span class="s1">copy(self):</span>
+            <span class="s0">'New ChainMap or subclass with a new copy of maps[0] and refs to maps[1:]'</span>
+            <span class="s2">return </span><span class="s1">self.__class__(self.maps[</span><span class="s3">0</span><span class="s1">].copy(), *self.maps[</span><span class="s3">1</span><span class="s1">:])</span>
+
+        <span class="s1">__copy__ = copy</span>
+
+        <span class="s2">def </span><span class="s1">new_child(self):  </span><span class="s0"># like Django's Context.push()</span>
+            <span class="s0">'New ChainMap with a new dict followed by all previous maps.'</span>
+            <span class="s2">return </span><span class="s1">self.__class__({}, *self.maps)</span>
+
+        <span class="s1">@property</span>
+        <span class="s2">def </span><span class="s1">parents(self):  </span><span class="s0"># like Django's Context.pop()</span>
+            <span class="s0">'New ChainMap from maps[1:].'</span>
+            <span class="s2">return </span><span class="s1">self.__class__(*self.maps[</span><span class="s3">1</span><span class="s1">:])</span>
+
+        <span class="s2">def </span><span class="s1">__setitem__(self, key, value):</span>
+            <span class="s1">self.maps[</span><span class="s3">0</span><span class="s1">][key] = value</span>
+
+        <span class="s2">def </span><span class="s1">__delitem__(self, key):</span>
+            <span class="s2">try</span><span class="s1">:</span>
+                <span class="s2">del </span><span class="s1">self.maps[</span><span class="s3">0</span><span class="s1">][key]</span>
+            <span class="s2">except </span><span class="s1">KeyError:</span>
+                <span class="s2">raise </span><span class="s1">KeyError(</span><span class="s4">'Key not found in the first mapping: {!r}'</span><span class="s1">.format(key))</span>
+
+        <span class="s2">def </span><span class="s1">popitem(self):</span>
+            <span class="s0">'Remove and return an item pair from maps[0]. Raise KeyError is maps[0] is empty.'</span>
+            <span class="s2">try</span><span class="s1">:</span>
+                <span class="s2">return </span><span class="s1">self.maps[</span><span class="s3">0</span><span class="s1">].popitem()</span>
+            <span class="s2">except </span><span class="s1">KeyError:</span>
+                <span class="s2">raise </span><span class="s1">KeyError(</span><span class="s4">'No keys found in the first mapping.'</span><span class="s1">)</span>
+
+        <span class="s2">def </span><span class="s1">pop(self, key, *args):</span>
+            <span class="s0">'Remove *key* from maps[0] and return its value. Raise KeyError if *key* not in maps[0].'</span>
+            <span class="s2">try</span><span class="s1">:</span>
+                <span class="s2">return </span><span class="s1">self.maps[</span><span class="s3">0</span><span class="s1">].pop(key, *args)</span>
+            <span class="s2">except </span><span class="s1">KeyError:</span>
+                <span class="s2">raise </span><span class="s1">KeyError(</span><span class="s4">'Key not found in the first mapping: {!r}'</span><span class="s1">.format(key))</span>
+
+        <span class="s2">def </span><span class="s1">clear(self):</span>
+            <span class="s0">'Clear maps[0], leaving maps[1:] intact.'</span>
+            <span class="s1">self.maps[</span><span class="s3">0</span><span class="s1">].clear()</span>
+
+
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s2">from </span><span class="s1">importlib.util </span><span class="s2">import </span><span class="s1">cache_from_source  </span><span class="s0"># Python &gt;= 3.4</span>
+<span class="s2">except </span><span class="s1">ImportError:  </span><span class="s0"># pragma: no cover</span>
+
+    <span class="s2">def </span><span class="s1">cache_from_source(path, debug_override=</span><span class="s2">None</span><span class="s1">, optimization=</span><span class="s2">None</span><span class="s1">):</span>
+        <span class="s2">assert </span><span class="s1">path.endswith(</span><span class="s4">'.py'</span><span class="s1">)</span>
+        <span class="s2">if </span><span class="s1">debug_override </span><span class="s2">is None</span><span class="s1">:</span>
+            <span class="s1">debug_override = </span><span class="s2">__debug__</span>
+        <span class="s2">if </span><span class="s1">debug_override:</span>
+            <span class="s1">suffix = </span><span class="s4">'c'</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s1">suffix = </span><span class="s4">'o'</span>
+        <span class="s2">return </span><span class="s1">path + suffix</span>
+
+
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s2">from </span><span class="s1">collections </span><span class="s2">import </span><span class="s1">OrderedDict</span>
+<span class="s2">except </span><span class="s1">ImportError:  </span><span class="s0"># pragma: no cover</span>
+    <span class="s0"># {{{ http://code.activestate.com/recipes/576693/ (r9)</span>
+    <span class="s0"># Backport of OrderedDict() class that runs on Python 2.4, 2.5, 2.6, 2.7 and pypy.</span>
+    <span class="s0"># Passes Python2.7's test suite and incorporates all the latest updates.</span>
+    <span class="s2">try</span><span class="s1">:</span>
+        <span class="s2">from </span><span class="s1">thread </span><span class="s2">import </span><span class="s1">get_ident </span><span class="s2">as </span><span class="s1">_get_ident</span>
+    <span class="s2">except </span><span class="s1">ImportError:</span>
+        <span class="s2">from </span><span class="s1">dummy_thread </span><span class="s2">import </span><span class="s1">get_ident </span><span class="s2">as </span><span class="s1">_get_ident</span>
+
+    <span class="s2">try</span><span class="s1">:</span>
+        <span class="s2">from </span><span class="s1">_abcoll </span><span class="s2">import </span><span class="s1">KeysView, ValuesView, ItemsView</span>
+    <span class="s2">except </span><span class="s1">ImportError:</span>
+        <span class="s2">pass</span>
+
+    <span class="s2">class </span><span class="s1">OrderedDict(dict):</span>
+        <span class="s0">'Dictionary that remembers insertion order'</span>
+
+        <span class="s0"># An inherited dict maps keys to values.</span>
+        <span class="s0"># The inherited dict provides __getitem__, __len__, __contains__, and get.</span>
+        <span class="s0"># The remaining methods are order-aware.</span>
+        <span class="s0"># Big-O running times for all methods are the same as for regular dictionaries.</span>
+
+        <span class="s0"># The internal self.__map dictionary maps keys to links in a doubly linked list.</span>
+        <span class="s0"># The circular doubly linked list starts and ends with a sentinel element.</span>
+        <span class="s0"># The sentinel element never gets deleted (this simplifies the algorithm).</span>
+        <span class="s0"># Each link is stored as a list of length three:  [PREV, NEXT, KEY].</span>
+
+        <span class="s2">def </span><span class="s1">__init__(self, *args, **kwds):</span>
+            <span class="s0">'''Initialize an ordered dictionary.  Signature is the same as for 
+            regular dictionaries, but keyword arguments are not recommended 
+            because their insertion order is arbitrary. 
+ 
+            '''</span>
+            <span class="s2">if </span><span class="s1">len(args) &gt; </span><span class="s3">1</span><span class="s1">:</span>
+                <span class="s2">raise </span><span class="s1">TypeError(</span><span class="s4">'expected at most 1 arguments, got %d' </span><span class="s1">% len(args))</span>
+            <span class="s2">try</span><span class="s1">:</span>
+                <span class="s1">self.__root</span>
+            <span class="s2">except </span><span class="s1">AttributeError:</span>
+                <span class="s1">self.__root = root = []  </span><span class="s0"># sentinel node</span>
+                <span class="s1">root[:] = [root, root, </span><span class="s2">None</span><span class="s1">]</span>
+                <span class="s1">self.__map = {}</span>
+            <span class="s1">self.__update(*args, **kwds)</span>
+
+        <span class="s2">def </span><span class="s1">__setitem__(self, key, value, dict_setitem=dict.__setitem__):</span>
+            <span class="s0">'od.__setitem__(i, y) &lt;==&gt; od[i]=y'</span>
+            <span class="s0"># Setting a new item creates a new link which goes at the end of the linked</span>
+            <span class="s0"># list, and the inherited dictionary is updated with the new key/value pair.</span>
+            <span class="s2">if </span><span class="s1">key </span><span class="s2">not in </span><span class="s1">self:</span>
+                <span class="s1">root = self.__root</span>
+                <span class="s1">last = root[</span><span class="s3">0</span><span class="s1">]</span>
+                <span class="s1">last[</span><span class="s3">1</span><span class="s1">] = root[</span><span class="s3">0</span><span class="s1">] = self.__map[key] = [last, root, key]</span>
+            <span class="s1">dict_setitem(self, key, value)</span>
+
+        <span class="s2">def </span><span class="s1">__delitem__(self, key, dict_delitem=dict.__delitem__):</span>
+            <span class="s0">'od.__delitem__(y) &lt;==&gt; del od[y]'</span>
+            <span class="s0"># Deleting an existing item uses self.__map to find the link which is</span>
+            <span class="s0"># then removed by updating the links in the predecessor and successor nodes.</span>
+            <span class="s1">dict_delitem(self, key)</span>
+            <span class="s1">link_prev, link_next, key = self.__map.pop(key)</span>
+            <span class="s1">link_prev[</span><span class="s3">1</span><span class="s1">] = link_next</span>
+            <span class="s1">link_next[</span><span class="s3">0</span><span class="s1">] = link_prev</span>
+
+        <span class="s2">def </span><span class="s1">__iter__(self):</span>
+            <span class="s0">'od.__iter__() &lt;==&gt; iter(od)'</span>
+            <span class="s1">root = self.__root</span>
+            <span class="s1">curr = root[</span><span class="s3">1</span><span class="s1">]</span>
+            <span class="s2">while </span><span class="s1">curr </span><span class="s2">is not </span><span class="s1">root:</span>
+                <span class="s2">yield </span><span class="s1">curr[</span><span class="s3">2</span><span class="s1">]</span>
+                <span class="s1">curr = curr[</span><span class="s3">1</span><span class="s1">]</span>
+
+        <span class="s2">def </span><span class="s1">__reversed__(self):</span>
+            <span class="s0">'od.__reversed__() &lt;==&gt; reversed(od)'</span>
+            <span class="s1">root = self.__root</span>
+            <span class="s1">curr = root[</span><span class="s3">0</span><span class="s1">]</span>
+            <span class="s2">while </span><span class="s1">curr </span><span class="s2">is not </span><span class="s1">root:</span>
+                <span class="s2">yield </span><span class="s1">curr[</span><span class="s3">2</span><span class="s1">]</span>
+                <span class="s1">curr = curr[</span><span class="s3">0</span><span class="s1">]</span>
+
+        <span class="s2">def </span><span class="s1">clear(self):</span>
+            <span class="s0">'od.clear() -&gt; None.  Remove all items from od.'</span>
+            <span class="s2">try</span><span class="s1">:</span>
+                <span class="s2">for </span><span class="s1">node </span><span class="s2">in </span><span class="s1">self.__map.itervalues():</span>
+                    <span class="s2">del </span><span class="s1">node[:]</span>
+                <span class="s1">root = self.__root</span>
+                <span class="s1">root[:] = [root, root, </span><span class="s2">None</span><span class="s1">]</span>
+                <span class="s1">self.__map.clear()</span>
+            <span class="s2">except </span><span class="s1">AttributeError:</span>
+                <span class="s2">pass</span>
+            <span class="s1">dict.clear(self)</span>
+
+        <span class="s2">def </span><span class="s1">popitem(self, last=</span><span class="s2">True</span><span class="s1">):</span>
+            <span class="s0">'''od.popitem() -&gt; (k, v), return and remove a (key, value) pair. 
+            Pairs are returned in LIFO order if last is true or FIFO order if false. 
+ 
+            '''</span>
+            <span class="s2">if not </span><span class="s1">self:</span>
+                <span class="s2">raise </span><span class="s1">KeyError(</span><span class="s4">'dictionary is empty'</span><span class="s1">)</span>
+            <span class="s1">root = self.__root</span>
+            <span class="s2">if </span><span class="s1">last:</span>
+                <span class="s1">link = root[</span><span class="s3">0</span><span class="s1">]</span>
+                <span class="s1">link_prev = link[</span><span class="s3">0</span><span class="s1">]</span>
+                <span class="s1">link_prev[</span><span class="s3">1</span><span class="s1">] = root</span>
+                <span class="s1">root[</span><span class="s3">0</span><span class="s1">] = link_prev</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s1">link = root[</span><span class="s3">1</span><span class="s1">]</span>
+                <span class="s1">link_next = link[</span><span class="s3">1</span><span class="s1">]</span>
+                <span class="s1">root[</span><span class="s3">1</span><span class="s1">] = link_next</span>
+                <span class="s1">link_next[</span><span class="s3">0</span><span class="s1">] = root</span>
+            <span class="s1">key = link[</span><span class="s3">2</span><span class="s1">]</span>
+            <span class="s2">del </span><span class="s1">self.__map[key]</span>
+            <span class="s1">value = dict.pop(self, key)</span>
+            <span class="s2">return </span><span class="s1">key, value</span>
+
+        <span class="s0"># -- the following methods do not depend on the internal structure --</span>
+
+        <span class="s2">def </span><span class="s1">keys(self):</span>
+            <span class="s0">'od.keys() -&gt; list of keys in od'</span>
+            <span class="s2">return </span><span class="s1">list(self)</span>
+
+        <span class="s2">def </span><span class="s1">values(self):</span>
+            <span class="s0">'od.values() -&gt; list of values in od'</span>
+            <span class="s2">return </span><span class="s1">[self[key] </span><span class="s2">for </span><span class="s1">key </span><span class="s2">in </span><span class="s1">self]</span>
+
+        <span class="s2">def </span><span class="s1">items(self):</span>
+            <span class="s0">'od.items() -&gt; list of (key, value) pairs in od'</span>
+            <span class="s2">return </span><span class="s1">[(key, self[key]) </span><span class="s2">for </span><span class="s1">key </span><span class="s2">in </span><span class="s1">self]</span>
+
+        <span class="s2">def </span><span class="s1">iterkeys(self):</span>
+            <span class="s0">'od.iterkeys() -&gt; an iterator over the keys in od'</span>
+            <span class="s2">return </span><span class="s1">iter(self)</span>
+
+        <span class="s2">def </span><span class="s1">itervalues(self):</span>
+            <span class="s0">'od.itervalues -&gt; an iterator over the values in od'</span>
+            <span class="s2">for </span><span class="s1">k </span><span class="s2">in </span><span class="s1">self:</span>
+                <span class="s2">yield </span><span class="s1">self[k]</span>
+
+        <span class="s2">def </span><span class="s1">iteritems(self):</span>
+            <span class="s0">'od.iteritems -&gt; an iterator over the (key, value) items in od'</span>
+            <span class="s2">for </span><span class="s1">k </span><span class="s2">in </span><span class="s1">self:</span>
+                <span class="s2">yield </span><span class="s1">(k, self[k])</span>
+
+        <span class="s2">def </span><span class="s1">update(*args, **kwds):</span>
+            <span class="s0">'''od.update(E, **F) -&gt; None.  Update od from dict/iterable E and F. 
+ 
+            If E is a dict instance, does:           for k in E: od[k] = E[k] 
+            If E has a .keys() method, does:         for k in E.keys(): od[k] = E[k] 
+            Or if E is an iterable of items, does:   for k, v in E: od[k] = v 
+            In either case, this is followed by:     for k, v in F.items(): od[k] = v 
+ 
+            '''</span>
+            <span class="s2">if </span><span class="s1">len(args) &gt; </span><span class="s3">2</span><span class="s1">:</span>
+                <span class="s2">raise </span><span class="s1">TypeError(</span><span class="s4">'update() takes at most 2 positional '</span>
+                                <span class="s4">'arguments (%d given)' </span><span class="s1">% (len(args), ))</span>
+            <span class="s2">elif not </span><span class="s1">args:</span>
+                <span class="s2">raise </span><span class="s1">TypeError(</span><span class="s4">'update() takes at least 1 argument (0 given)'</span><span class="s1">)</span>
+            <span class="s1">self = args[</span><span class="s3">0</span><span class="s1">]</span>
+            <span class="s0"># Make progressively weaker assumptions about &quot;other&quot;</span>
+            <span class="s1">other = ()</span>
+            <span class="s2">if </span><span class="s1">len(args) == </span><span class="s3">2</span><span class="s1">:</span>
+                <span class="s1">other = args[</span><span class="s3">1</span><span class="s1">]</span>
+            <span class="s2">if </span><span class="s1">isinstance(other, dict):</span>
+                <span class="s2">for </span><span class="s1">key </span><span class="s2">in </span><span class="s1">other:</span>
+                    <span class="s1">self[key] = other[key]</span>
+            <span class="s2">elif </span><span class="s1">hasattr(other, </span><span class="s4">'keys'</span><span class="s1">):</span>
+                <span class="s2">for </span><span class="s1">key </span><span class="s2">in </span><span class="s1">other.keys():</span>
+                    <span class="s1">self[key] = other[key]</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s2">for </span><span class="s1">key, value </span><span class="s2">in </span><span class="s1">other:</span>
+                    <span class="s1">self[key] = value</span>
+            <span class="s2">for </span><span class="s1">key, value </span><span class="s2">in </span><span class="s1">kwds.items():</span>
+                <span class="s1">self[key] = value</span>
+
+        <span class="s1">__update = update  </span><span class="s0"># let subclasses override update without breaking __init__</span>
+
+        <span class="s1">__marker = object()</span>
+
+        <span class="s2">def </span><span class="s1">pop(self, key, default=__marker):</span>
+            <span class="s0">'''od.pop(k[,d]) -&gt; v, remove specified key and return the corresponding value. 
+            If key is not found, d is returned if given, otherwise KeyError is raised. 
+ 
+            '''</span>
+            <span class="s2">if </span><span class="s1">key </span><span class="s2">in </span><span class="s1">self:</span>
+                <span class="s1">result = self[key]</span>
+                <span class="s2">del </span><span class="s1">self[key]</span>
+                <span class="s2">return </span><span class="s1">result</span>
+            <span class="s2">if </span><span class="s1">default </span><span class="s2">is </span><span class="s1">self.__marker:</span>
+                <span class="s2">raise </span><span class="s1">KeyError(key)</span>
+            <span class="s2">return </span><span class="s1">default</span>
+
+        <span class="s2">def </span><span class="s1">setdefault(self, key, default=</span><span class="s2">None</span><span class="s1">):</span>
+            <span class="s0">'od.setdefault(k[,d]) -&gt; od.get(k,d), also set od[k]=d if k not in od'</span>
+            <span class="s2">if </span><span class="s1">key </span><span class="s2">in </span><span class="s1">self:</span>
+                <span class="s2">return </span><span class="s1">self[key]</span>
+            <span class="s1">self[key] = default</span>
+            <span class="s2">return </span><span class="s1">default</span>
+
+        <span class="s2">def </span><span class="s1">__repr__(self, _repr_running=</span><span class="s2">None</span><span class="s1">):</span>
+            <span class="s0">'od.__repr__() &lt;==&gt; repr(od)'</span>
+            <span class="s2">if not </span><span class="s1">_repr_running:</span>
+                <span class="s1">_repr_running = {}</span>
+            <span class="s1">call_key = id(self), _get_ident()</span>
+            <span class="s2">if </span><span class="s1">call_key </span><span class="s2">in </span><span class="s1">_repr_running:</span>
+                <span class="s2">return </span><span class="s4">'...'</span>
+            <span class="s1">_repr_running[call_key] = </span><span class="s3">1</span>
+            <span class="s2">try</span><span class="s1">:</span>
+                <span class="s2">if not </span><span class="s1">self:</span>
+                    <span class="s2">return </span><span class="s4">'%s()' </span><span class="s1">% (self.__class__.__name__, )</span>
+                <span class="s2">return </span><span class="s4">'%s(%r)' </span><span class="s1">% (self.__class__.__name__, self.items())</span>
+            <span class="s2">finally</span><span class="s1">:</span>
+                <span class="s2">del </span><span class="s1">_repr_running[call_key]</span>
+
+        <span class="s2">def </span><span class="s1">__reduce__(self):</span>
+            <span class="s0">'Return state information for pickling'</span>
+            <span class="s1">items = [[k, self[k]] </span><span class="s2">for </span><span class="s1">k </span><span class="s2">in </span><span class="s1">self]</span>
+            <span class="s1">inst_dict = vars(self).copy()</span>
+            <span class="s2">for </span><span class="s1">k </span><span class="s2">in </span><span class="s1">vars(OrderedDict()):</span>
+                <span class="s1">inst_dict.pop(k, </span><span class="s2">None</span><span class="s1">)</span>
+            <span class="s2">if </span><span class="s1">inst_dict:</span>
+                <span class="s2">return </span><span class="s1">(self.__class__, (items, ), inst_dict)</span>
+            <span class="s2">return </span><span class="s1">self.__class__, (items, )</span>
+
+        <span class="s2">def </span><span class="s1">copy(self):</span>
+            <span class="s0">'od.copy() -&gt; a shallow copy of od'</span>
+            <span class="s2">return </span><span class="s1">self.__class__(self)</span>
+
+        <span class="s1">@classmethod</span>
+        <span class="s2">def </span><span class="s1">fromkeys(cls, iterable, value=</span><span class="s2">None</span><span class="s1">):</span>
+            <span class="s0">'''OD.fromkeys(S[, v]) -&gt; New ordered dictionary with keys from S 
+            and values equal to v (which defaults to None). 
+ 
+            '''</span>
+            <span class="s1">d = cls()</span>
+            <span class="s2">for </span><span class="s1">key </span><span class="s2">in </span><span class="s1">iterable:</span>
+                <span class="s1">d[key] = value</span>
+            <span class="s2">return </span><span class="s1">d</span>
+
+        <span class="s2">def </span><span class="s1">__eq__(self, other):</span>
+            <span class="s0">'''od.__eq__(y) &lt;==&gt; od==y.  Comparison to another OD is order-sensitive 
+            while comparison to a regular mapping is order-insensitive. 
+ 
+            '''</span>
+            <span class="s2">if </span><span class="s1">isinstance(other, OrderedDict):</span>
+                <span class="s2">return </span><span class="s1">len(self) == len(other) </span><span class="s2">and </span><span class="s1">self.items() == other.items()</span>
+            <span class="s2">return </span><span class="s1">dict.__eq__(self, other)</span>
+
+        <span class="s2">def </span><span class="s1">__ne__(self, other):</span>
+            <span class="s2">return not </span><span class="s1">self == other</span>
+
+        <span class="s0"># -- the following methods are only used in Python 2.7 --</span>
+
+        <span class="s2">def </span><span class="s1">viewkeys(self):</span>
+            <span class="s0">&quot;od.viewkeys() -&gt; a set-like object providing a view on od's keys&quot;</span>
+            <span class="s2">return </span><span class="s1">KeysView(self)</span>
+
+        <span class="s2">def </span><span class="s1">viewvalues(self):</span>
+            <span class="s0">&quot;od.viewvalues() -&gt; an object providing a view on od's values&quot;</span>
+            <span class="s2">return </span><span class="s1">ValuesView(self)</span>
+
+        <span class="s2">def </span><span class="s1">viewitems(self):</span>
+            <span class="s0">&quot;od.viewitems() -&gt; a set-like object providing a view on od's items&quot;</span>
+            <span class="s2">return </span><span class="s1">ItemsView(self)</span>
+
+
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s2">from </span><span class="s1">logging.config </span><span class="s2">import </span><span class="s1">BaseConfigurator, valid_ident</span>
+<span class="s2">except </span><span class="s1">ImportError:  </span><span class="s0"># pragma: no cover</span>
+    <span class="s1">IDENTIFIER = re.compile(</span><span class="s4">'^[a-z_][a-z0-9_]*$'</span><span class="s1">, re.I)</span>
+
+    <span class="s2">def </span><span class="s1">valid_ident(s):</span>
+        <span class="s1">m = IDENTIFIER.match(s)</span>
+        <span class="s2">if not </span><span class="s1">m:</span>
+            <span class="s2">raise </span><span class="s1">ValueError(</span><span class="s4">'Not a valid Python identifier: %r' </span><span class="s1">% s)</span>
+        <span class="s2">return True</span>
+
+    <span class="s0"># The ConvertingXXX classes are wrappers around standard Python containers,</span>
+    <span class="s0"># and they serve to convert any suitable values in the container. The</span>
+    <span class="s0"># conversion converts base dicts, lists and tuples to their wrapped</span>
+    <span class="s0"># equivalents, whereas strings which match a conversion format are converted</span>
+    <span class="s0"># appropriately.</span>
+    <span class="s0">#</span>
+    <span class="s0"># Each wrapper should have a configurator attribute holding the actual</span>
+    <span class="s0"># configurator to use for conversion.</span>
+
+    <span class="s2">class </span><span class="s1">ConvertingDict(dict):</span>
+        <span class="s0">&quot;&quot;&quot;A converting dictionary wrapper.&quot;&quot;&quot;</span>
+
+        <span class="s2">def </span><span class="s1">__getitem__(self, key):</span>
+            <span class="s1">value = dict.__getitem__(self, key)</span>
+            <span class="s1">result = self.configurator.convert(value)</span>
+            <span class="s0"># If the converted value is different, save for next time</span>
+            <span class="s2">if </span><span class="s1">value </span><span class="s2">is not </span><span class="s1">result:</span>
+                <span class="s1">self[key] = result</span>
+                <span class="s2">if </span><span class="s1">type(result) </span><span class="s2">in </span><span class="s1">(ConvertingDict, ConvertingList, ConvertingTuple):</span>
+                    <span class="s1">result.parent = self</span>
+                    <span class="s1">result.key = key</span>
+            <span class="s2">return </span><span class="s1">result</span>
+
+        <span class="s2">def </span><span class="s1">get(self, key, default=</span><span class="s2">None</span><span class="s1">):</span>
+            <span class="s1">value = dict.get(self, key, default)</span>
+            <span class="s1">result = self.configurator.convert(value)</span>
+            <span class="s0"># If the converted value is different, save for next time</span>
+            <span class="s2">if </span><span class="s1">value </span><span class="s2">is not </span><span class="s1">result:</span>
+                <span class="s1">self[key] = result</span>
+                <span class="s2">if </span><span class="s1">type(result) </span><span class="s2">in </span><span class="s1">(ConvertingDict, ConvertingList, ConvertingTuple):</span>
+                    <span class="s1">result.parent = self</span>
+                    <span class="s1">result.key = key</span>
+            <span class="s2">return </span><span class="s1">result</span>
+
+    <span class="s2">def </span><span class="s1">pop(self, key, default=</span><span class="s2">None</span><span class="s1">):</span>
+        <span class="s1">value = dict.pop(self, key, default)</span>
+        <span class="s1">result = self.configurator.convert(value)</span>
+        <span class="s2">if </span><span class="s1">value </span><span class="s2">is not </span><span class="s1">result:</span>
+            <span class="s2">if </span><span class="s1">type(result) </span><span class="s2">in </span><span class="s1">(ConvertingDict, ConvertingList, ConvertingTuple):</span>
+                <span class="s1">result.parent = self</span>
+                <span class="s1">result.key = key</span>
+        <span class="s2">return </span><span class="s1">result</span>
+
+    <span class="s2">class </span><span class="s1">ConvertingList(list):</span>
+        <span class="s0">&quot;&quot;&quot;A converting list wrapper.&quot;&quot;&quot;</span>
+
+        <span class="s2">def </span><span class="s1">__getitem__(self, key):</span>
+            <span class="s1">value = list.__getitem__(self, key)</span>
+            <span class="s1">result = self.configurator.convert(value)</span>
+            <span class="s0"># If the converted value is different, save for next time</span>
+            <span class="s2">if </span><span class="s1">value </span><span class="s2">is not </span><span class="s1">result:</span>
+                <span class="s1">self[key] = result</span>
+                <span class="s2">if </span><span class="s1">type(result) </span><span class="s2">in </span><span class="s1">(ConvertingDict, ConvertingList, ConvertingTuple):</span>
+                    <span class="s1">result.parent = self</span>
+                    <span class="s1">result.key = key</span>
+            <span class="s2">return </span><span class="s1">result</span>
+
+        <span class="s2">def </span><span class="s1">pop(self, idx=-</span><span class="s3">1</span><span class="s1">):</span>
+            <span class="s1">value = list.pop(self, idx)</span>
+            <span class="s1">result = self.configurator.convert(value)</span>
+            <span class="s2">if </span><span class="s1">value </span><span class="s2">is not </span><span class="s1">result:</span>
+                <span class="s2">if </span><span class="s1">type(result) </span><span class="s2">in </span><span class="s1">(ConvertingDict, ConvertingList, ConvertingTuple):</span>
+                    <span class="s1">result.parent = self</span>
+            <span class="s2">return </span><span class="s1">result</span>
+
+    <span class="s2">class </span><span class="s1">ConvertingTuple(tuple):</span>
+        <span class="s0">&quot;&quot;&quot;A converting tuple wrapper.&quot;&quot;&quot;</span>
+
+        <span class="s2">def </span><span class="s1">__getitem__(self, key):</span>
+            <span class="s1">value = tuple.__getitem__(self, key)</span>
+            <span class="s1">result = self.configurator.convert(value)</span>
+            <span class="s2">if </span><span class="s1">value </span><span class="s2">is not </span><span class="s1">result:</span>
+                <span class="s2">if </span><span class="s1">type(result) </span><span class="s2">in </span><span class="s1">(ConvertingDict, ConvertingList, ConvertingTuple):</span>
+                    <span class="s1">result.parent = self</span>
+                    <span class="s1">result.key = key</span>
+            <span class="s2">return </span><span class="s1">result</span>
+
+    <span class="s2">class </span><span class="s1">BaseConfigurator(object):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        The configurator base class which defines some useful defaults. 
+        &quot;&quot;&quot;</span>
+
+        <span class="s1">CONVERT_PATTERN = re.compile(</span><span class="s4">r'^(?P&lt;prefix&gt;[a-z]+)://(?P&lt;suffix&gt;.*)$'</span><span class="s1">)</span>
+
+        <span class="s1">WORD_PATTERN = re.compile(</span><span class="s4">r'^\s*(\w+)\s*'</span><span class="s1">)</span>
+        <span class="s1">DOT_PATTERN = re.compile(</span><span class="s4">r'^\.\s*(\w+)\s*'</span><span class="s1">)</span>
+        <span class="s1">INDEX_PATTERN = re.compile(</span><span class="s4">r'^\[\s*(\w+)\s*\]\s*'</span><span class="s1">)</span>
+        <span class="s1">DIGIT_PATTERN = re.compile(</span><span class="s4">r'^\d+$'</span><span class="s1">)</span>
+
+        <span class="s1">value_converters = {</span>
+            <span class="s4">'ext'</span><span class="s1">: </span><span class="s4">'ext_convert'</span><span class="s1">,</span>
+            <span class="s4">'cfg'</span><span class="s1">: </span><span class="s4">'cfg_convert'</span><span class="s1">,</span>
+        <span class="s1">}</span>
+
+        <span class="s0"># We might want to use a different one, e.g. importlib</span>
+        <span class="s1">importer = staticmethod(__import__)</span>
+
+        <span class="s2">def </span><span class="s1">__init__(self, config):</span>
+            <span class="s1">self.config = ConvertingDict(config)</span>
+            <span class="s1">self.config.configurator = self</span>
+
+        <span class="s2">def </span><span class="s1">resolve(self, s):</span>
+            <span class="s0">&quot;&quot;&quot; 
+            Resolve strings to objects using standard import and attribute 
+            syntax. 
+            &quot;&quot;&quot;</span>
+            <span class="s1">name = s.split(</span><span class="s4">'.'</span><span class="s1">)</span>
+            <span class="s1">used = name.pop(</span><span class="s3">0</span><span class="s1">)</span>
+            <span class="s2">try</span><span class="s1">:</span>
+                <span class="s1">found = self.importer(used)</span>
+                <span class="s2">for </span><span class="s1">frag </span><span class="s2">in </span><span class="s1">name:</span>
+                    <span class="s1">used += </span><span class="s4">'.' </span><span class="s1">+ frag</span>
+                    <span class="s2">try</span><span class="s1">:</span>
+                        <span class="s1">found = getattr(found, frag)</span>
+                    <span class="s2">except </span><span class="s1">AttributeError:</span>
+                        <span class="s1">self.importer(used)</span>
+                        <span class="s1">found = getattr(found, frag)</span>
+                <span class="s2">return </span><span class="s1">found</span>
+            <span class="s2">except </span><span class="s1">ImportError:</span>
+                <span class="s1">e, tb = sys.exc_info()[</span><span class="s3">1</span><span class="s1">:]</span>
+                <span class="s1">v = ValueError(</span><span class="s4">'Cannot resolve %r: %s' </span><span class="s1">% (s, e))</span>
+                <span class="s1">v.__cause__, v.__traceback__ = e, tb</span>
+                <span class="s2">raise </span><span class="s1">v</span>
+
+        <span class="s2">def </span><span class="s1">ext_convert(self, value):</span>
+            <span class="s0">&quot;&quot;&quot;Default converter for the ext:// protocol.&quot;&quot;&quot;</span>
+            <span class="s2">return </span><span class="s1">self.resolve(value)</span>
+
+        <span class="s2">def </span><span class="s1">cfg_convert(self, value):</span>
+            <span class="s0">&quot;&quot;&quot;Default converter for the cfg:// protocol.&quot;&quot;&quot;</span>
+            <span class="s1">rest = value</span>
+            <span class="s1">m = self.WORD_PATTERN.match(rest)</span>
+            <span class="s2">if </span><span class="s1">m </span><span class="s2">is None</span><span class="s1">:</span>
+                <span class="s2">raise </span><span class="s1">ValueError(</span><span class="s4">&quot;Unable to convert %r&quot; </span><span class="s1">% value)</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s1">rest = rest[m.end():]</span>
+                <span class="s1">d = self.config[m.groups()[</span><span class="s3">0</span><span class="s1">]]</span>
+                <span class="s2">while </span><span class="s1">rest:</span>
+                    <span class="s1">m = self.DOT_PATTERN.match(rest)</span>
+                    <span class="s2">if </span><span class="s1">m:</span>
+                        <span class="s1">d = d[m.groups()[</span><span class="s3">0</span><span class="s1">]]</span>
+                    <span class="s2">else</span><span class="s1">:</span>
+                        <span class="s1">m = self.INDEX_PATTERN.match(rest)</span>
+                        <span class="s2">if </span><span class="s1">m:</span>
+                            <span class="s1">idx = m.groups()[</span><span class="s3">0</span><span class="s1">]</span>
+                            <span class="s2">if not </span><span class="s1">self.DIGIT_PATTERN.match(idx):</span>
+                                <span class="s1">d = d[idx]</span>
+                            <span class="s2">else</span><span class="s1">:</span>
+                                <span class="s2">try</span><span class="s1">:</span>
+                                    <span class="s1">n = int(idx)  </span><span class="s0"># try as number first (most likely)</span>
+                                    <span class="s1">d = d[n]</span>
+                                <span class="s2">except </span><span class="s1">TypeError:</span>
+                                    <span class="s1">d = d[idx]</span>
+                    <span class="s2">if </span><span class="s1">m:</span>
+                        <span class="s1">rest = rest[m.end():]</span>
+                    <span class="s2">else</span><span class="s1">:</span>
+                        <span class="s2">raise </span><span class="s1">ValueError(</span><span class="s4">'Unable to convert '</span>
+                                         <span class="s4">'%r at %r' </span><span class="s1">% (value, rest))</span>
+            <span class="s0"># rest should be empty</span>
+            <span class="s2">return </span><span class="s1">d</span>
+
+        <span class="s2">def </span><span class="s1">convert(self, value):</span>
+            <span class="s0">&quot;&quot;&quot; 
+            Convert values to an appropriate type. dicts, lists and tuples are 
+            replaced by their converting alternatives. Strings are checked to 
+            see if they have a conversion format and are converted if they do. 
+            &quot;&quot;&quot;</span>
+            <span class="s2">if not </span><span class="s1">isinstance(value, ConvertingDict) </span><span class="s2">and </span><span class="s1">isinstance(value, dict):</span>
+                <span class="s1">value = ConvertingDict(value)</span>
+                <span class="s1">value.configurator = self</span>
+            <span class="s2">elif not </span><span class="s1">isinstance(value, ConvertingList) </span><span class="s2">and </span><span class="s1">isinstance(value, list):</span>
+                <span class="s1">value = ConvertingList(value)</span>
+                <span class="s1">value.configurator = self</span>
+            <span class="s2">elif not </span><span class="s1">isinstance(value, ConvertingTuple) </span><span class="s2">and </span><span class="s1">isinstance(value, tuple):</span>
+                <span class="s1">value = ConvertingTuple(value)</span>
+                <span class="s1">value.configurator = self</span>
+            <span class="s2">elif </span><span class="s1">isinstance(value, string_types):</span>
+                <span class="s1">m = self.CONVERT_PATTERN.match(value)</span>
+                <span class="s2">if </span><span class="s1">m:</span>
+                    <span class="s1">d = m.groupdict()</span>
+                    <span class="s1">prefix = d[</span><span class="s4">'prefix'</span><span class="s1">]</span>
+                    <span class="s1">converter = self.value_converters.get(prefix, </span><span class="s2">None</span><span class="s1">)</span>
+                    <span class="s2">if </span><span class="s1">converter:</span>
+                        <span class="s1">suffix = d[</span><span class="s4">'suffix'</span><span class="s1">]</span>
+                        <span class="s1">converter = getattr(self, converter)</span>
+                        <span class="s1">value = converter(suffix)</span>
+            <span class="s2">return </span><span class="s1">value</span>
+
+        <span class="s2">def </span><span class="s1">configure_custom(self, config):</span>
+            <span class="s0">&quot;&quot;&quot;Configure an object with a user-supplied factory.&quot;&quot;&quot;</span>
+            <span class="s1">c = config.pop(</span><span class="s4">'()'</span><span class="s1">)</span>
+            <span class="s2">if not </span><span class="s1">callable(c):</span>
+                <span class="s1">c = self.resolve(c)</span>
+            <span class="s1">props = config.pop(</span><span class="s4">'.'</span><span class="s1">, </span><span class="s2">None</span><span class="s1">)</span>
+            <span class="s0"># Check for valid identifiers</span>
+            <span class="s1">kwargs = dict([(k, config[k]) </span><span class="s2">for </span><span class="s1">k </span><span class="s2">in </span><span class="s1">config </span><span class="s2">if </span><span class="s1">valid_ident(k)])</span>
+            <span class="s1">result = c(**kwargs)</span>
+            <span class="s2">if </span><span class="s1">props:</span>
+                <span class="s2">for </span><span class="s1">name, value </span><span class="s2">in </span><span class="s1">props.items():</span>
+                    <span class="s1">setattr(result, name, value)</span>
+            <span class="s2">return </span><span class="s1">result</span>
+
+        <span class="s2">def </span><span class="s1">as_tuple(self, value):</span>
+            <span class="s0">&quot;&quot;&quot;Utility function which converts lists to tuples.&quot;&quot;&quot;</span>
+            <span class="s2">if </span><span class="s1">isinstance(value, list):</span>
+                <span class="s1">value = tuple(value)</span>
+            <span class="s2">return </span><span class="s1">value</span>
+</pre>
+</body>
+</html>

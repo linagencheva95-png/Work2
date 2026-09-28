@@ -1,0 +1,150 @@
+<html>
+<head>
+<title>cli.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #8c8c8c; font-style: italic;}
+.s1 { color: #080808;}
+.s2 { color: #0033b3;}
+.s3 { color: #067d17;}
+.s4 { color: #0037a6;}
+.s5 { color: #1750eb;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+cli.py</font>
+</center></td></tr></table>
+<pre><span class="s0">&quot;&quot;&quot;Command-line interface for the :mod:`idna` package. 
+ 
+Invoked via ``python -m idna``. See :func:`main` for the entry point. 
+&quot;&quot;&quot;</span>
+
+<span class="s2">import </span><span class="s1">argparse</span>
+<span class="s2">import </span><span class="s1">sys</span>
+<span class="s2">from </span><span class="s1">collections.abc </span><span class="s2">import </span><span class="s1">Iterable</span>
+<span class="s2">from </span><span class="s1">itertools </span><span class="s2">import </span><span class="s1">chain</span>
+<span class="s2">from </span><span class="s1">typing </span><span class="s2">import </span><span class="s1">IO, Optional</span>
+
+<span class="s2">from </span><span class="s1">. </span><span class="s2">import </span><span class="s1">IDNAError, decode, encode</span>
+<span class="s2">from </span><span class="s1">.core </span><span class="s2">import </span><span class="s1">_alabel_prefix, _unicode_dots_re</span>
+<span class="s2">from </span><span class="s1">.package_data </span><span class="s2">import </span><span class="s1">__version__</span>
+
+
+<span class="s2">def </span><span class="s1">_looks_like_alabel(s: str) -&gt; bool:</span>
+    <span class="s0">&quot;&quot;&quot;Return True if any label in ``s`` carries the ``xn--`` ACE prefix.&quot;&quot;&quot;</span>
+    <span class="s1">prefix = _alabel_prefix.decode(</span><span class="s3">&quot;ascii&quot;</span><span class="s1">)</span>
+    <span class="s2">return </span><span class="s1">any(label.lower().startswith(prefix) </span><span class="s2">for </span><span class="s1">label </span><span class="s2">in </span><span class="s1">_unicode_dots_re.split(s))</span>
+
+
+<span class="s2">def </span><span class="s1">_build_parser() -&gt; argparse.ArgumentParser:</span>
+    <span class="s1">parser = argparse.ArgumentParser(</span>
+        <span class="s1">prog=</span><span class="s3">&quot;python -m idna&quot;</span><span class="s1">,</span>
+        <span class="s1">description=(</span>
+            <span class="s3">&quot;Convert a domain name between its Unicode (U-label) and &quot;</span>
+            <span class="s3">&quot;ASCII-compatible (A-label) forms. With no mode flag, the &quot;</span>
+            <span class="s3">&quot;direction is chosen from the first input — if it contains &quot;</span>
+            <span class="s3">&quot;an xn-- label the stream is decoded, otherwise it is &quot;</span>
+            <span class="s3">&quot;encoded — and the same mode is applied to every remaining &quot;</span>
+            <span class="s3">&quot;input. UTS #46 mapping is applied by default; pass &quot;</span>
+            <span class="s3">&quot;--strict to disable it. When no domains are given on the &quot;</span>
+            <span class="s3">&quot;command line and stdin is piped, one domain per line is &quot;</span>
+            <span class="s3">&quot;read from stdin.&quot;</span>
+        <span class="s1">),</span>
+    <span class="s1">)</span>
+    <span class="s1">mode = parser.add_mutually_exclusive_group()</span>
+    <span class="s1">mode.add_argument(</span>
+        <span class="s3">&quot;-e&quot;</span><span class="s1">,</span>
+        <span class="s3">&quot;--encode&quot;</span><span class="s1">,</span>
+        <span class="s1">dest=</span><span class="s3">&quot;mode&quot;</span><span class="s1">,</span>
+        <span class="s1">action=</span><span class="s3">&quot;store_const&quot;</span><span class="s1">,</span>
+        <span class="s1">const=</span><span class="s3">&quot;encode&quot;</span><span class="s1">,</span>
+        <span class="s1">help=</span><span class="s3">&quot;Encode the input to its ASCII A-label form.&quot;</span><span class="s1">,</span>
+    <span class="s1">)</span>
+    <span class="s1">mode.add_argument(</span>
+        <span class="s3">&quot;-d&quot;</span><span class="s1">,</span>
+        <span class="s3">&quot;--decode&quot;</span><span class="s1">,</span>
+        <span class="s1">dest=</span><span class="s3">&quot;mode&quot;</span><span class="s1">,</span>
+        <span class="s1">action=</span><span class="s3">&quot;store_const&quot;</span><span class="s1">,</span>
+        <span class="s1">const=</span><span class="s3">&quot;decode&quot;</span><span class="s1">,</span>
+        <span class="s1">help=</span><span class="s3">&quot;Decode the input from its ASCII A-label form.&quot;</span><span class="s1">,</span>
+    <span class="s1">)</span>
+    <span class="s1">parser.add_argument(</span>
+        <span class="s3">&quot;--strict&quot;</span><span class="s1">,</span>
+        <span class="s1">action=</span><span class="s3">&quot;store_true&quot;</span><span class="s1">,</span>
+        <span class="s1">help=</span><span class="s3">&quot;Disable the default UTS #46 mapping and apply IDNA 2008 rules verbatim.&quot;</span><span class="s1">,</span>
+    <span class="s1">)</span>
+    <span class="s1">parser.add_argument(</span>
+        <span class="s3">&quot;--version&quot;</span><span class="s1">,</span>
+        <span class="s1">action=</span><span class="s3">&quot;version&quot;</span><span class="s1">,</span>
+        <span class="s1">version=</span><span class="s3">f&quot;idna </span><span class="s4">{</span><span class="s1">__version__</span><span class="s4">}</span><span class="s3">&quot;</span><span class="s1">,</span>
+    <span class="s1">)</span>
+    <span class="s1">parser.add_argument(</span>
+        <span class="s3">&quot;domain&quot;</span><span class="s1">,</span>
+        <span class="s1">nargs=</span><span class="s3">&quot;*&quot;</span><span class="s1">,</span>
+        <span class="s1">help=</span><span class="s3">&quot;One or more domain names to convert. Omit to read from stdin.&quot;</span><span class="s1">,</span>
+    <span class="s1">)</span>
+    <span class="s2">return </span><span class="s1">parser</span>
+
+
+<span class="s2">def </span><span class="s1">_iter_stdin(stream: IO[str]) -&gt; Iterable[str]:</span>
+    <span class="s0">&quot;&quot;&quot;Yield non-empty stripped lines from ``stream``, ignoring blanks.&quot;&quot;&quot;</span>
+    <span class="s2">for </span><span class="s1">line </span><span class="s2">in </span><span class="s1">stream:</span>
+        <span class="s1">stripped = line.strip()</span>
+        <span class="s2">if </span><span class="s1">stripped:</span>
+            <span class="s2">yield </span><span class="s1">stripped</span>
+
+
+<span class="s2">def </span><span class="s1">_convert_one(domain: str, mode: str, uts46: bool) -&gt; bool:</span>
+    <span class="s0">&quot;&quot;&quot;Convert ``domain`` and write the result; return ``False`` on failure.&quot;&quot;&quot;</span>
+    <span class="s2">try</span><span class="s1">:</span>
+        <span class="s2">if </span><span class="s1">mode == </span><span class="s3">&quot;decode&quot;</span><span class="s1">:</span>
+            <span class="s1">print(decode(domain, uts46=uts46))</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s1">print(encode(domain, uts46=uts46).decode(</span><span class="s3">&quot;ascii&quot;</span><span class="s1">))</span>
+    <span class="s2">except </span><span class="s1">IDNAError </span><span class="s2">as </span><span class="s1">err:</span>
+        <span class="s1">print(</span><span class="s3">f&quot;idna: </span><span class="s4">{</span><span class="s1">mode</span><span class="s4">} </span><span class="s3">failed for </span><span class="s4">{</span><span class="s1">domain</span><span class="s4">!r}</span><span class="s3">: </span><span class="s4">{</span><span class="s1">err</span><span class="s4">}</span><span class="s3">&quot;</span><span class="s1">, file=sys.stderr)</span>
+        <span class="s2">return False</span>
+    <span class="s2">return True</span>
+
+
+<span class="s2">def </span><span class="s1">main(argv: Optional[list[str]] = </span><span class="s2">None</span><span class="s1">) -&gt; int:</span>
+    <span class="s0">&quot;&quot;&quot;Entry point for ``python -m idna``. 
+ 
+    When more than one domain is supplied (via positional arguments or 
+    piped stdin) and no mode flag is given, the first input determines 
+    the direction and that mode is applied uniformly to the rest. 
+ 
+    :param argv: Argument list excluding the program name. Defaults to 
+        :data:`sys.argv` when ``None``. 
+    :returns: ``0`` on success, ``1`` if any conversion fails. 
+    &quot;&quot;&quot;</span>
+    <span class="s1">parser = _build_parser()</span>
+    <span class="s1">args = parser.parse_args(argv)</span>
+    <span class="s1">uts46 = </span><span class="s2">not </span><span class="s1">args.strict</span>
+
+    <span class="s2">if </span><span class="s1">args.domain:</span>
+        <span class="s1">domains: Iterable[str] = args.domain</span>
+    <span class="s2">elif not </span><span class="s1">sys.stdin.isatty():</span>
+        <span class="s1">domains = _iter_stdin(sys.stdin)</span>
+    <span class="s2">else</span><span class="s1">:</span>
+        <span class="s1">parser.error(</span><span class="s3">&quot;a domain argument is required when stdin is a terminal&quot;</span><span class="s1">)</span>
+
+    <span class="s1">iterator = iter(domains)</span>
+    <span class="s1">first = next(iterator, </span><span class="s2">None</span><span class="s1">)</span>
+    <span class="s2">if </span><span class="s1">first </span><span class="s2">is None</span><span class="s1">:</span>
+        <span class="s2">return </span><span class="s5">0</span>
+
+    <span class="s1">mode = args.mode </span><span class="s2">or </span><span class="s1">(</span><span class="s3">&quot;decode&quot; </span><span class="s2">if </span><span class="s1">_looks_like_alabel(first) </span><span class="s2">else </span><span class="s3">&quot;encode&quot;</span><span class="s1">)</span>
+
+    <span class="s1">results = [_convert_one(domain, mode, uts46) </span><span class="s2">for </span><span class="s1">domain </span><span class="s2">in </span><span class="s1">chain([first], iterator)]</span>
+    <span class="s2">return </span><span class="s5">0 </span><span class="s2">if </span><span class="s1">all(results) </span><span class="s2">else </span><span class="s5">1</span>
+
+
+<span class="s2">if </span><span class="s1">__name__ == </span><span class="s3">&quot;__main__&quot;</span><span class="s1">:</span>
+    <span class="s1">sys.exit(main())</span>
+</pre>
+</body>
+</html>

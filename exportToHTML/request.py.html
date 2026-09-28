@@ -1,0 +1,41 @@
+<html>
+<head>
+<title>request.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #0033b3;}
+.s1 { color: #080808;}
+.s2 { color: #1750eb;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+request.py</font>
+</center></td></tr></table>
+<pre><span class="s0">from </span><span class="s1">__future__ </span><span class="s0">import </span><span class="s1">annotations</span>
+
+<span class="s0">from </span><span class="s1">dataclasses </span><span class="s0">import </span><span class="s1">dataclass, field</span>
+
+<span class="s0">from </span><span class="s1">..._base_connection </span><span class="s0">import </span><span class="s1">_TYPE_BODY</span>
+
+
+<span class="s1">@dataclass</span>
+<span class="s0">class </span><span class="s1">EmscriptenRequest:</span>
+    <span class="s1">method: str</span>
+    <span class="s1">url: str</span>
+    <span class="s1">params: dict[str, str] | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span>
+    <span class="s1">body: _TYPE_BODY | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span>
+    <span class="s1">headers: dict[str, str] = field(default_factory=dict)</span>
+    <span class="s1">timeout: float = </span><span class="s2">0</span>
+    <span class="s1">decode_content: bool = </span><span class="s0">True</span>
+
+    <span class="s0">def </span><span class="s1">set_header(self, name: str, value: str) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">self.headers[name.capitalize()] = value</span>
+
+    <span class="s0">def </span><span class="s1">set_body(self, body: _TYPE_BODY | </span><span class="s0">None</span><span class="s1">) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s1">self.body = body</span>
+</pre>
+</body>
+</html>

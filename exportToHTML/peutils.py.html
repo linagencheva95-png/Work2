@@ -1,0 +1,610 @@
+<html>
+<head>
+<title>peutils.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #080808;}
+.s1 { color: #8c8c8c; font-style: italic;}
+.s2 { color: #0033b3;}
+.s3 { color: #067d17;}
+.s4 { color: #1750eb;}
+.s5 { color: #0037a6;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+peutils.py</font>
+</center></td></tr></table>
+<pre>
+<span class="s1">&quot;&quot;&quot;peutils, Portable Executable utilities module 
+ 
+ 
+Copyright (c) 2005-2023 Ero Carrera &lt;ero.carrera@gmail.com&gt; 
+ 
+All rights reserved. 
+&quot;&quot;&quot;</span>
+<span class="s2">import </span><span class="s0">os</span>
+<span class="s2">import </span><span class="s0">re</span>
+<span class="s2">import </span><span class="s0">string</span>
+<span class="s2">import </span><span class="s0">urllib.error</span>
+<span class="s2">import </span><span class="s0">urllib.parse</span>
+<span class="s2">import </span><span class="s0">urllib.request</span>
+
+<span class="s2">import </span><span class="s0">pefile</span>
+
+<span class="s0">__author__ = </span><span class="s3">&quot;Ero Carrera&quot;</span>
+<span class="s0">__version__ = pefile.__version__</span>
+<span class="s0">__contact__ = </span><span class="s3">&quot;ero.carrera@gmail.com&quot;</span>
+
+
+<span class="s2">class </span><span class="s0">SignatureDatabase:</span>
+    <span class="s1">&quot;&quot;&quot;This class loads and keeps a parsed PEiD signature database. 
+ 
+    Usage: 
+ 
+        sig_db = SignatureDatabase('/path/to/signature/file') 
+ 
+    and/or 
+ 
+        sig_db = SignatureDatabase() 
+        sig_db.load('/path/to/signature/file') 
+ 
+    Signature databases can be combined by performing multiple loads. 
+ 
+    The filename parameter can be a URL too. In that case the 
+    signature database will be downloaded from that location. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s2">def </span><span class="s0">__init__(self, filename=</span><span class="s2">None</span><span class="s0">, data=</span><span class="s2">None</span><span class="s0">):</span>
+
+        <span class="s1"># RegExp to match a signature block</span>
+        <span class="s1">#</span>
+        <span class="s0">self.parse_sig = re.compile(</span>
+            <span class="s3">r&quot;\[(.*?)\]\s+?signature\s*=\s*(.*?)(\s+\?\?)*\s*ep_only\s*=\s*(\w+)(?:\s*section_start_only\s*=\s*(\w+)|)&quot;</span><span class="s0">,</span>
+            <span class="s0">re.S,</span>
+        <span class="s0">)</span>
+
+        <span class="s1"># Signature information</span>
+        <span class="s1">#</span>
+        <span class="s1"># Signatures are stored as trees using dictionaries</span>
+        <span class="s1"># The keys are the byte values while the values for</span>
+        <span class="s1"># each key are either:</span>
+        <span class="s1">#</span>
+        <span class="s1"># - Other dictionaries of the same form for further</span>
+        <span class="s1">#   bytes in the signature</span>
+        <span class="s1">#</span>
+        <span class="s1"># - A dictionary with a string as a key (packer name)</span>
+        <span class="s1">#   and None as value to indicate a full signature</span>
+        <span class="s1">#</span>
+        <span class="s0">self.signature_tree_eponly_true = dict()</span>
+        <span class="s0">self.signature_count_eponly_true = </span><span class="s4">0</span>
+        <span class="s0">self.signature_tree_eponly_false = dict()</span>
+        <span class="s0">self.signature_count_eponly_false = </span><span class="s4">0</span>
+        <span class="s0">self.signature_tree_section_start = dict()</span>
+        <span class="s0">self.signature_count_section_start = </span><span class="s4">0</span>
+
+        <span class="s1"># The depth (length) of the longest signature</span>
+        <span class="s1">#</span>
+        <span class="s0">self.max_depth = </span><span class="s4">0</span>
+
+        <span class="s0">self.__load(filename=filename, data=data)</span>
+
+    <span class="s2">def </span><span class="s0">generate_section_signatures(self, pe, name, sig_length=</span><span class="s4">512</span><span class="s0">):</span>
+        <span class="s1">&quot;&quot;&quot;Generates signatures for all the sections in a PE file. 
+ 
+        If the section contains any data a signature will be created 
+        for it. The signature name will be a combination of the 
+        parameter 'name' and the section number and its name. 
+        &quot;&quot;&quot;</span>
+
+        <span class="s0">section_signatures = list()</span>
+
+        <span class="s2">for </span><span class="s0">idx, section </span><span class="s2">in </span><span class="s0">enumerate(pe.sections):</span>
+
+            <span class="s2">if </span><span class="s0">section.SizeOfRawData &lt; sig_length:</span>
+                <span class="s2">continue</span>
+
+            <span class="s1"># offset = pe.get_offset_from_rva(section.VirtualAddress)</span>
+            <span class="s0">offset = section.PointerToRawData</span>
+
+            <span class="s0">sig_name = </span><span class="s3">&quot;%s Section(%d/%d,%s)&quot; </span><span class="s0">% (</span>
+                <span class="s0">name,</span>
+                <span class="s0">idx + </span><span class="s4">1</span><span class="s0">,</span>
+                <span class="s0">len(pe.sections),</span>
+                <span class="s3">&quot;&quot;</span><span class="s0">.join([c </span><span class="s2">for </span><span class="s0">c </span><span class="s2">in </span><span class="s0">section.Name </span><span class="s2">if </span><span class="s0">c </span><span class="s2">in </span><span class="s0">string.printable]),</span>
+            <span class="s0">)</span>
+
+            <span class="s0">section_signatures.append(</span>
+                <span class="s0">self.__generate_signature(</span>
+                    <span class="s0">pe,</span>
+                    <span class="s0">offset,</span>
+                    <span class="s0">sig_name,</span>
+                    <span class="s0">ep_only=</span><span class="s2">False</span><span class="s0">,</span>
+                    <span class="s0">section_start_only=</span><span class="s2">True</span><span class="s0">,</span>
+                    <span class="s0">sig_length=sig_length,</span>
+                <span class="s0">)</span>
+            <span class="s0">)</span>
+
+        <span class="s2">return </span><span class="s3">&quot;</span><span class="s5">\n</span><span class="s3">&quot;</span><span class="s0">.join(section_signatures) + </span><span class="s3">&quot;</span><span class="s5">\n</span><span class="s3">&quot;</span>
+
+    <span class="s2">def </span><span class="s0">generate_ep_signature(self, pe, name, sig_length=</span><span class="s4">512</span><span class="s0">):</span>
+        <span class="s1">&quot;&quot;&quot;Generate signatures for the entry point of a PE file. 
+ 
+        Creates a signature whose name will be the parameter 'name' 
+        and the section number and its name. 
+        &quot;&quot;&quot;</span>
+
+        <span class="s0">offset = pe.get_offset_from_rva(pe.OPTIONAL_HEADER.AddressOfEntryPoint)</span>
+
+        <span class="s2">return </span><span class="s0">self.__generate_signature(</span>
+            <span class="s0">pe, offset, name, ep_only=</span><span class="s2">True</span><span class="s0">, sig_length=sig_length</span>
+        <span class="s0">)</span>
+
+    <span class="s2">def </span><span class="s0">__generate_signature(</span>
+        <span class="s0">self, pe, offset, name, ep_only=</span><span class="s2">False</span><span class="s0">, section_start_only=</span><span class="s2">False</span><span class="s0">, sig_length=</span><span class="s4">512</span>
+    <span class="s0">):</span>
+
+        <span class="s0">data = pe.__data__[offset : offset + sig_length]</span>
+
+        <span class="s0">signature_bytes = </span><span class="s3">&quot; &quot;</span><span class="s0">.join([</span><span class="s3">&quot;%02x&quot; </span><span class="s0">% ord(c) </span><span class="s2">for </span><span class="s0">c </span><span class="s2">in </span><span class="s0">data])</span>
+
+        <span class="s2">if </span><span class="s0">ep_only == </span><span class="s2">True</span><span class="s0">:</span>
+            <span class="s0">ep_only = </span><span class="s3">&quot;true&quot;</span>
+        <span class="s2">else</span><span class="s0">:</span>
+            <span class="s0">ep_only = </span><span class="s3">&quot;false&quot;</span>
+
+        <span class="s2">if </span><span class="s0">section_start_only == </span><span class="s2">True</span><span class="s0">:</span>
+            <span class="s0">section_start_only = </span><span class="s3">&quot;true&quot;</span>
+        <span class="s2">else</span><span class="s0">:</span>
+            <span class="s0">section_start_only = </span><span class="s3">&quot;false&quot;</span>
+
+        <span class="s0">signature = </span><span class="s3">&quot;[%s]</span><span class="s5">\n</span><span class="s3">signature = %s</span><span class="s5">\n</span><span class="s3">ep_only = %s</span><span class="s5">\n</span><span class="s3">section_start_only = %s</span><span class="s5">\n</span><span class="s3">&quot; </span><span class="s0">% (</span>
+            <span class="s0">name,</span>
+            <span class="s0">signature_bytes,</span>
+            <span class="s0">ep_only,</span>
+            <span class="s0">section_start_only,</span>
+        <span class="s0">)</span>
+
+        <span class="s2">return </span><span class="s0">signature</span>
+
+    <span class="s2">def </span><span class="s0">match(self, pe, ep_only=</span><span class="s2">True</span><span class="s0">, section_start_only=</span><span class="s2">False</span><span class="s0">):</span>
+        <span class="s1">&quot;&quot;&quot;Matches and returns the exact match(es). 
+ 
+        If ep_only is True the result will be a string with 
+        the packer name. Otherwise it will be a list of the 
+        form (file_offset, packer_name) specifying where 
+        in the file the signature was found. 
+        &quot;&quot;&quot;</span>
+
+        <span class="s0">matches = self.__match(pe, ep_only, section_start_only)</span>
+
+        <span class="s1"># The last match (the most precise) from the</span>
+        <span class="s1"># list of matches (if any) is returned</span>
+        <span class="s1">#</span>
+        <span class="s2">if </span><span class="s0">matches:</span>
+            <span class="s2">if </span><span class="s0">ep_only == </span><span class="s2">False</span><span class="s0">:</span>
+                <span class="s1"># Get the most exact match for each list of matches</span>
+                <span class="s1"># at a given offset</span>
+                <span class="s1">#</span>
+                <span class="s2">return </span><span class="s0">[(match[</span><span class="s4">0</span><span class="s0">], match[</span><span class="s4">1</span><span class="s0">][-</span><span class="s4">1</span><span class="s0">]) </span><span class="s2">for </span><span class="s0">match </span><span class="s2">in </span><span class="s0">matches]</span>
+
+            <span class="s2">return </span><span class="s0">matches[</span><span class="s4">1</span><span class="s0">][-</span><span class="s4">1</span><span class="s0">]</span>
+
+        <span class="s2">return None</span>
+
+    <span class="s2">def </span><span class="s0">match_all(self, pe, ep_only=</span><span class="s2">True</span><span class="s0">, section_start_only=</span><span class="s2">False</span><span class="s0">):</span>
+        <span class="s1">&quot;&quot;&quot;Matches and returns all the likely matches.&quot;&quot;&quot;</span>
+
+        <span class="s0">matches = self.__match(pe, ep_only, section_start_only)</span>
+
+        <span class="s2">if </span><span class="s0">matches:</span>
+            <span class="s2">if </span><span class="s0">ep_only == </span><span class="s2">False</span><span class="s0">:</span>
+                <span class="s1"># Get the most exact match for each list of matches</span>
+                <span class="s1"># at a given offset</span>
+                <span class="s1">#</span>
+                <span class="s2">return </span><span class="s0">matches</span>
+
+            <span class="s2">return </span><span class="s0">matches[</span><span class="s4">1</span><span class="s0">]</span>
+
+        <span class="s2">return None</span>
+
+    <span class="s2">def </span><span class="s0">__match(self, pe, ep_only, section_start_only):</span>
+
+        <span class="s1"># Load the corresponding set of signatures</span>
+        <span class="s1"># Either the one for ep_only equal to True or</span>
+        <span class="s1"># to False</span>
+        <span class="s1">#</span>
+        <span class="s2">if </span><span class="s0">section_start_only </span><span class="s2">is True</span><span class="s0">:</span>
+
+            <span class="s1"># Fetch the data of the executable as it'd</span>
+            <span class="s1"># look once loaded in memory</span>
+            <span class="s1">#</span>
+            <span class="s2">try</span><span class="s0">:</span>
+                <span class="s0">data = pe.__data__</span>
+            <span class="s2">except </span><span class="s0">Exception </span><span class="s2">as </span><span class="s0">excp:</span>
+                <span class="s2">raise</span>
+
+            <span class="s1"># Load the corresponding tree of signatures</span>
+            <span class="s1">#</span>
+            <span class="s0">signatures = self.signature_tree_section_start</span>
+
+            <span class="s1"># Set the starting address to start scanning from</span>
+            <span class="s1">#</span>
+            <span class="s0">scan_addresses = [section.PointerToRawData </span><span class="s2">for </span><span class="s0">section </span><span class="s2">in </span><span class="s0">pe.sections]</span>
+
+        <span class="s2">elif </span><span class="s0">ep_only </span><span class="s2">is True</span><span class="s0">:</span>
+
+            <span class="s1"># Fetch the data of the executable as it'd</span>
+            <span class="s1"># look once loaded in memory</span>
+            <span class="s1">#</span>
+            <span class="s2">try</span><span class="s0">:</span>
+                <span class="s0">data = pe.get_memory_mapped_image()</span>
+            <span class="s2">except </span><span class="s0">Exception </span><span class="s2">as </span><span class="s0">excp:</span>
+                <span class="s2">raise</span>
+
+            <span class="s1"># Load the corresponding tree of signatures</span>
+            <span class="s1">#</span>
+            <span class="s0">signatures = self.signature_tree_eponly_true</span>
+
+            <span class="s1"># Fetch the entry point of the PE file and the data</span>
+            <span class="s1"># at the entry point</span>
+            <span class="s1">#</span>
+            <span class="s0">ep = pe.OPTIONAL_HEADER.AddressOfEntryPoint</span>
+
+            <span class="s1"># Set the starting address to start scanning from</span>
+            <span class="s1">#</span>
+            <span class="s0">scan_addresses = [ep]</span>
+
+        <span class="s2">else</span><span class="s0">:</span>
+
+            <span class="s0">data = pe.__data__</span>
+
+            <span class="s0">signatures = self.signature_tree_eponly_false</span>
+
+            <span class="s0">scan_addresses = range(len(data))</span>
+
+        <span class="s1"># For each start address, check if any signature matches</span>
+        <span class="s1">#</span>
+        <span class="s0">matches = []</span>
+        <span class="s2">for </span><span class="s0">idx </span><span class="s2">in </span><span class="s0">scan_addresses:</span>
+            <span class="s0">result = self.__match_signature_tree(</span>
+                <span class="s0">signatures, data[idx : idx + self.max_depth]</span>
+            <span class="s0">)</span>
+            <span class="s2">if </span><span class="s0">result:</span>
+                <span class="s0">matches.append((idx, result))</span>
+
+        <span class="s1"># Return only the matched items found at the entry point if</span>
+        <span class="s1"># ep_only is True (matches will have only one element in that</span>
+        <span class="s1"># case)</span>
+        <span class="s1">#</span>
+        <span class="s2">if </span><span class="s0">ep_only </span><span class="s2">is True</span><span class="s0">:</span>
+            <span class="s2">if </span><span class="s0">matches:</span>
+                <span class="s2">return </span><span class="s0">matches[</span><span class="s4">0</span><span class="s0">]</span>
+
+        <span class="s2">return </span><span class="s0">matches</span>
+
+    <span class="s2">def </span><span class="s0">match_data(self, code_data, ep_only=</span><span class="s2">True</span><span class="s0">, section_start_only=</span><span class="s2">False</span><span class="s0">):</span>
+
+        <span class="s0">data = code_data</span>
+        <span class="s0">scan_addresses = [</span><span class="s4">0</span><span class="s0">]</span>
+
+        <span class="s1"># Load the corresponding set of signatures</span>
+        <span class="s1"># Either the one for ep_only equal to True or</span>
+        <span class="s1"># to False</span>
+        <span class="s1">#</span>
+        <span class="s2">if </span><span class="s0">section_start_only </span><span class="s2">is True</span><span class="s0">:</span>
+
+            <span class="s1"># Load the corresponding tree of signatures</span>
+            <span class="s1">#</span>
+            <span class="s0">signatures = self.signature_tree_section_start</span>
+
+            <span class="s1"># Set the starting address to start scanning from</span>
+            <span class="s1">#</span>
+
+        <span class="s2">elif </span><span class="s0">ep_only </span><span class="s2">is True</span><span class="s0">:</span>
+
+            <span class="s1"># Load the corresponding tree of signatures</span>
+            <span class="s1">#</span>
+            <span class="s0">signatures = self.signature_tree_eponly_true</span>
+
+        <span class="s1"># For each start address, check if any signature matches</span>
+        <span class="s1">#</span>
+        <span class="s0">matches = []</span>
+        <span class="s2">for </span><span class="s0">idx </span><span class="s2">in </span><span class="s0">scan_addresses:</span>
+            <span class="s0">result = self.__match_signature_tree(</span>
+                <span class="s0">signatures, data[idx : idx + self.max_depth]</span>
+            <span class="s0">)</span>
+            <span class="s2">if </span><span class="s0">result:</span>
+                <span class="s0">matches.append((idx, result))</span>
+
+        <span class="s1"># Return only the matched items found at the entry point if</span>
+        <span class="s1"># ep_only is True (matches will have only one element in that</span>
+        <span class="s1"># case)</span>
+        <span class="s1">#</span>
+        <span class="s2">if </span><span class="s0">ep_only </span><span class="s2">is True</span><span class="s0">:</span>
+            <span class="s2">if </span><span class="s0">matches:</span>
+                <span class="s2">return </span><span class="s0">matches[</span><span class="s4">0</span><span class="s0">]</span>
+
+        <span class="s2">return </span><span class="s0">matches</span>
+
+    <span class="s2">def </span><span class="s0">__match_signature_tree(self, signature_tree, data, depth=</span><span class="s4">0</span><span class="s0">):</span>
+        <span class="s1">&quot;&quot;&quot;Recursive function to find matches along the signature tree. 
+ 
+        signature_tree  is the part of the tree left to walk 
+        data    is the data being checked against the signature tree 
+        depth   keeps track of how far we have gone down the tree 
+        &quot;&quot;&quot;</span>
+
+        <span class="s0">matched_names = list()</span>
+        <span class="s0">match = signature_tree</span>
+
+        <span class="s1"># Walk the bytes in the data and match them</span>
+        <span class="s1"># against the signature</span>
+        <span class="s1">#</span>
+        <span class="s2">for </span><span class="s0">idx, byte </span><span class="s2">in </span><span class="s0">enumerate([b </span><span class="s2">if </span><span class="s0">isinstance(b, int) </span><span class="s2">else </span><span class="s0">ord(b) </span><span class="s2">for </span><span class="s0">b </span><span class="s2">in </span><span class="s0">data]):</span>
+
+            <span class="s1"># If the tree is exhausted...</span>
+            <span class="s1">#</span>
+            <span class="s2">if </span><span class="s0">match </span><span class="s2">is None</span><span class="s0">:</span>
+                <span class="s2">break</span>
+
+            <span class="s1"># Get the next byte in the tree</span>
+            <span class="s1">#</span>
+            <span class="s0">match_next = match.get(byte, </span><span class="s2">None</span><span class="s0">)</span>
+
+            <span class="s1"># If None is among the values for the key</span>
+            <span class="s1"># it means that a signature in the database</span>
+            <span class="s1"># ends here and that there's an exact match.</span>
+            <span class="s1">#</span>
+            <span class="s2">if None in </span><span class="s0">list(match.values()):</span>
+                <span class="s1"># idx represent how deep we are in the tree</span>
+                <span class="s1">#</span>
+                <span class="s1"># names = [idx+depth]</span>
+                <span class="s0">names = list()</span>
+
+                <span class="s1"># For each of the item pairs we check</span>
+                <span class="s1"># if it has an element other than None,</span>
+                <span class="s1"># if not then we have an exact signature</span>
+                <span class="s1">#</span>
+                <span class="s2">for </span><span class="s0">item </span><span class="s2">in </span><span class="s0">list(match.items()):</span>
+                    <span class="s2">if </span><span class="s0">item[</span><span class="s4">1</span><span class="s0">] </span><span class="s2">is None</span><span class="s0">:</span>
+                        <span class="s0">names.append(item[</span><span class="s4">0</span><span class="s0">])</span>
+                <span class="s0">matched_names.append(names)</span>
+
+            <span class="s1"># If a wildcard is found keep scanning the signature</span>
+            <span class="s1"># ignoring the byte.</span>
+            <span class="s1">#</span>
+            <span class="s2">if </span><span class="s3">&quot;??&quot; </span><span class="s2">in </span><span class="s0">match:</span>
+                <span class="s0">match_tree_alternate = match.get(</span><span class="s3">&quot;??&quot;</span><span class="s0">, </span><span class="s2">None</span><span class="s0">)</span>
+                <span class="s0">data_remaining = data[idx + </span><span class="s4">1 </span><span class="s0">:]</span>
+                <span class="s2">if </span><span class="s0">data_remaining:</span>
+                    <span class="s0">matched_names.extend(</span>
+                        <span class="s0">self.__match_signature_tree(</span>
+                            <span class="s0">match_tree_alternate, data_remaining, idx + depth + </span><span class="s4">1</span>
+                        <span class="s0">)</span>
+                    <span class="s0">)</span>
+
+            <span class="s0">match = match_next</span>
+
+        <span class="s1"># If we have any more packer name in the end of the signature tree</span>
+        <span class="s1"># add them to the matches</span>
+        <span class="s1">#</span>
+        <span class="s2">if </span><span class="s0">match </span><span class="s2">is not None and None in </span><span class="s0">list(match.values()):</span>
+            <span class="s1"># names = [idx + depth + 1]</span>
+            <span class="s0">names = list()</span>
+            <span class="s2">for </span><span class="s0">item </span><span class="s2">in </span><span class="s0">list(match.items()):</span>
+                <span class="s2">if </span><span class="s0">item[</span><span class="s4">1</span><span class="s0">] </span><span class="s2">is None</span><span class="s0">:</span>
+                    <span class="s0">names.append(item[</span><span class="s4">0</span><span class="s0">])</span>
+            <span class="s0">matched_names.append(names)</span>
+
+        <span class="s2">return </span><span class="s0">matched_names</span>
+
+    <span class="s2">def </span><span class="s0">load(self, filename=</span><span class="s2">None</span><span class="s0">, data=</span><span class="s2">None</span><span class="s0">):</span>
+        <span class="s1">&quot;&quot;&quot;Load a PEiD signature file. 
+ 
+        Invoking this method on different files combines the signatures. 
+        &quot;&quot;&quot;</span>
+
+        <span class="s0">self.__load(filename=filename, data=data)</span>
+
+    <span class="s2">def </span><span class="s0">__load(self, filename=</span><span class="s2">None</span><span class="s0">, data=</span><span class="s2">None</span><span class="s0">):</span>
+
+        <span class="s2">if </span><span class="s0">filename </span><span class="s2">is not None</span><span class="s0">:</span>
+            <span class="s1"># If the path does not exist, attempt to open a URL</span>
+            <span class="s1">#</span>
+            <span class="s2">if not </span><span class="s0">os.path.exists(filename):</span>
+                <span class="s2">try</span><span class="s0">:</span>
+                    <span class="s0">sig_f = urllib.request.urlopen(filename)</span>
+                    <span class="s0">sig_data = sig_f.read()</span>
+                    <span class="s0">sig_f.close()</span>
+                <span class="s2">except </span><span class="s0">OSError:</span>
+                    <span class="s1"># Let this be raised back to the user...</span>
+                    <span class="s2">raise</span>
+            <span class="s2">else</span><span class="s0">:</span>
+                <span class="s1"># Get the data for a file</span>
+                <span class="s1">#</span>
+                <span class="s2">try</span><span class="s0">:</span>
+                    <span class="s0">sig_f = open(filename, </span><span class="s3">&quot;rt&quot;</span><span class="s0">)</span>
+                    <span class="s0">sig_data = sig_f.read()</span>
+                    <span class="s0">sig_f.close()</span>
+                <span class="s2">except </span><span class="s0">OSError:</span>
+                    <span class="s1"># Let this be raised back to the user...</span>
+                    <span class="s2">raise</span>
+        <span class="s2">else</span><span class="s0">:</span>
+            <span class="s0">sig_data = data</span>
+
+        <span class="s1"># If the file/URL could not be read or no &quot;raw&quot; data</span>
+        <span class="s1"># was provided there's nothing else to do</span>
+        <span class="s1">#</span>
+        <span class="s2">if not </span><span class="s0">sig_data:</span>
+            <span class="s2">return</span>
+
+        <span class="s1"># Helper function to parse the signature bytes</span>
+        <span class="s1">#</span>
+        <span class="s2">def </span><span class="s0">to_byte(value):</span>
+            <span class="s2">if </span><span class="s3">&quot;?&quot; </span><span class="s2">in </span><span class="s0">value:</span>
+                <span class="s2">return </span><span class="s0">value</span>
+            <span class="s2">return </span><span class="s0">int(value, </span><span class="s4">16</span><span class="s0">)</span>
+
+        <span class="s1"># Parse all the signatures in the file</span>
+        <span class="s1">#</span>
+        <span class="s0">matches = self.parse_sig.findall(sig_data)</span>
+
+        <span class="s1"># For each signature, get the details and load it into the</span>
+        <span class="s1"># signature tree</span>
+        <span class="s1">#</span>
+        <span class="s2">for </span><span class="s0">(</span>
+            <span class="s0">packer_name,</span>
+            <span class="s0">signature,</span>
+            <span class="s0">superfluous_wildcards,</span>
+            <span class="s0">ep_only,</span>
+            <span class="s0">section_start_only,</span>
+        <span class="s0">) </span><span class="s2">in </span><span class="s0">matches:</span>
+
+            <span class="s0">ep_only = ep_only.strip().lower()</span>
+
+            <span class="s0">signature = signature.replace(</span><span class="s3">&quot;</span><span class="s5">\\</span><span class="s3">n&quot;</span><span class="s0">, </span><span class="s3">&quot;&quot;</span><span class="s0">).strip()</span>
+
+            <span class="s0">signature_bytes = [to_byte(b) </span><span class="s2">for </span><span class="s0">b </span><span class="s2">in </span><span class="s0">signature.split()]</span>
+
+            <span class="s2">if </span><span class="s0">ep_only == </span><span class="s3">&quot;true&quot;</span><span class="s0">:</span>
+                <span class="s0">ep_only = </span><span class="s2">True</span>
+            <span class="s2">else</span><span class="s0">:</span>
+                <span class="s0">ep_only = </span><span class="s2">False</span>
+
+            <span class="s2">if </span><span class="s0">section_start_only == </span><span class="s3">&quot;true&quot;</span><span class="s0">:</span>
+                <span class="s0">section_start_only = </span><span class="s2">True</span>
+            <span class="s2">else</span><span class="s0">:</span>
+                <span class="s0">section_start_only = </span><span class="s2">False</span>
+
+            <span class="s0">depth = </span><span class="s4">0</span>
+
+            <span class="s2">if </span><span class="s0">section_start_only </span><span class="s2">is True</span><span class="s0">:</span>
+
+                <span class="s0">tree = self.signature_tree_section_start</span>
+                <span class="s0">self.signature_count_section_start += </span><span class="s4">1</span>
+
+            <span class="s2">else</span><span class="s0">:</span>
+                <span class="s2">if </span><span class="s0">ep_only </span><span class="s2">is True</span><span class="s0">:</span>
+                    <span class="s0">tree = self.signature_tree_eponly_true</span>
+                    <span class="s0">self.signature_count_eponly_true += </span><span class="s4">1</span>
+                <span class="s2">else</span><span class="s0">:</span>
+                    <span class="s0">tree = self.signature_tree_eponly_false</span>
+                    <span class="s0">self.signature_count_eponly_false += </span><span class="s4">1</span>
+
+            <span class="s2">for </span><span class="s0">idx, byte </span><span class="s2">in </span><span class="s0">enumerate(signature_bytes):</span>
+
+                <span class="s2">if </span><span class="s0">idx + </span><span class="s4">1 </span><span class="s0">== len(signature_bytes):</span>
+
+                    <span class="s0">tree[byte] = tree.get(byte, dict())</span>
+                    <span class="s0">tree[byte][packer_name] = </span><span class="s2">None</span>
+
+                <span class="s2">else</span><span class="s0">:</span>
+
+                    <span class="s0">tree[byte] = tree.get(byte, dict())</span>
+
+                <span class="s0">tree = tree[byte]</span>
+                <span class="s0">depth += </span><span class="s4">1</span>
+
+            <span class="s2">if </span><span class="s0">depth &gt; self.max_depth:</span>
+                <span class="s0">self.max_depth = depth</span>
+
+
+<span class="s2">def </span><span class="s0">is_valid(pe):</span>
+    <span class="s1">&quot;&quot;&quot;&quot;&quot;&quot;</span>
+    <span class="s2">pass</span>
+
+
+<span class="s2">def </span><span class="s0">is_suspicious(pe):</span>
+    <span class="s1">&quot;&quot;&quot; 
+    unusual locations of import tables 
+    non recognized section names 
+    presence of long ASCII strings 
+    &quot;&quot;&quot;</span>
+
+    <span class="s0">relocations_overlap_entry_point = </span><span class="s2">False</span>
+    <span class="s0">sequential_relocs = </span><span class="s4">0</span>
+
+    <span class="s1"># If relocation data is found and the entries go over the entry point, and also are very</span>
+    <span class="s1"># continuous or point outside section's boundaries =&gt; it might imply that an obfuscation</span>
+    <span class="s1"># trick is being used or the relocations are corrupt (maybe intentionally)</span>
+    <span class="s1">#</span>
+    <span class="s2">if </span><span class="s0">hasattr(pe, </span><span class="s3">&quot;DIRECTORY_ENTRY_BASERELOC&quot;</span><span class="s0">):</span>
+        <span class="s2">for </span><span class="s0">base_reloc </span><span class="s2">in </span><span class="s0">pe.DIRECTORY_ENTRY_BASERELOC:</span>
+            <span class="s0">last_reloc_rva = </span><span class="s2">None</span>
+            <span class="s2">for </span><span class="s0">reloc </span><span class="s2">in </span><span class="s0">base_reloc.entries:</span>
+                <span class="s2">if </span><span class="s0">reloc.rva &lt;= pe.OPTIONAL_HEADER.AddressOfEntryPoint &lt;= reloc.rva + </span><span class="s4">4</span><span class="s0">:</span>
+                    <span class="s0">relocations_overlap_entry_point = </span><span class="s2">True</span>
+
+                <span class="s2">if </span><span class="s0">(</span>
+                    <span class="s0">last_reloc_rva </span><span class="s2">is not None</span>
+                    <span class="s2">and </span><span class="s0">last_reloc_rva &lt;= reloc.rva &lt;= last_reloc_rva + </span><span class="s4">4</span>
+                <span class="s0">):</span>
+                    <span class="s0">sequential_relocs += </span><span class="s4">1</span>
+
+                <span class="s0">last_reloc_rva = reloc.rva</span>
+
+    <span class="s1"># If import tables or strings exist (are pointed to) to within the header or in the area</span>
+    <span class="s1"># between the PE header and the first section that's suspicious</span>
+    <span class="s1">#</span>
+    <span class="s1"># IMPLEMENT</span>
+
+    <span class="s0">warnings_while_parsing = </span><span class="s2">False</span>
+    <span class="s1"># If we have warnings, that's suspicious, some of those will be because of out-of-ordinary</span>
+    <span class="s1"># values are found in the PE header fields</span>
+    <span class="s1"># Things that are reported in warnings:</span>
+    <span class="s1"># (parsing problems, special section characteristics i.e. W &amp; X, uncommon values of fields,</span>
+    <span class="s1"># unusual entrypoint, suspicious imports)</span>
+    <span class="s1">#</span>
+    <span class="s0">warnings = pe.get_warnings()</span>
+    <span class="s2">if </span><span class="s0">warnings:</span>
+        <span class="s0">warnings_while_parsing</span>
+
+    <span class="s1"># If there are few or none (should come with a standard &quot;density&quot; of strings/kilobytes of data) longer (&gt;8)</span>
+    <span class="s1"># ascii sequences that might indicate packed data, (this is similar to the entropy test in some ways but</span>
+    <span class="s1"># might help to discard cases of legitimate installer or compressed data)</span>
+
+    <span class="s1"># If compressed data (high entropy) and is_driver =&gt; uuuuhhh, nasty</span>
+
+    <span class="s2">pass</span>
+
+
+<span class="s2">def </span><span class="s0">is_probably_packed(pe):</span>
+    <span class="s1">&quot;&quot;&quot;Returns True is there is a high likelihood that a file is packed or contains compressed data. 
+ 
+    The sections of the PE file will be analyzed, if enough sections 
+    look like containing compressed data and the data makes 
+    up for more than 20% of the total file size, the function will 
+    return True. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s1"># Calculate the length of the data up to the end of the last section in the</span>
+    <span class="s1"># file. Overlay data won't be taken into account</span>
+    <span class="s1">#</span>
+    <span class="s0">total_pe_data_length = len(pe.trim())</span>
+    <span class="s1"># Assume that the file is packed when no data is available</span>
+    <span class="s2">if not </span><span class="s0">total_pe_data_length:</span>
+        <span class="s2">return True</span>
+    <span class="s0">has_significant_amount_of_compressed_data = </span><span class="s2">False</span>
+
+    <span class="s1"># If some of the sections have high entropy and they make for more than 20% of the file's size</span>
+    <span class="s1"># it's assumed that it could be an installer or a packed file</span>
+
+    <span class="s0">total_compressed_data = </span><span class="s4">0</span>
+    <span class="s2">for </span><span class="s0">section </span><span class="s2">in </span><span class="s0">pe.sections:</span>
+        <span class="s0">s_entropy = section.get_entropy()</span>
+        <span class="s0">s_length = len(section.get_data())</span>
+        <span class="s1"># The value of 7.4 is empirical, based on looking at a few files packed</span>
+        <span class="s1"># by different packers</span>
+        <span class="s2">if </span><span class="s0">s_entropy &gt; </span><span class="s4">7.4</span><span class="s0">:</span>
+            <span class="s0">total_compressed_data += s_length</span>
+
+    <span class="s2">if </span><span class="s0">(total_compressed_data / total_pe_data_length) &gt; </span><span class="s4">0.2</span><span class="s0">:</span>
+        <span class="s0">has_significant_amount_of_compressed_data = </span><span class="s2">True</span>
+
+    <span class="s2">return </span><span class="s0">has_significant_amount_of_compressed_data</span>
+</pre>
+</body>
+</html>

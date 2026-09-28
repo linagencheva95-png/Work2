@@ -1,0 +1,394 @@
+<html>
+<head>
+<title>resources.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #8c8c8c; font-style: italic;}
+.s1 { color: #080808;}
+.s2 { color: #0033b3;}
+.s3 { color: #067d17;}
+.s4 { color: #8a822d;}
+.s5 { color: #1750eb;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+resources.py</font>
+</center></td></tr></table>
+<pre><span class="s0"># -*- coding: utf-8 -*-</span>
+<span class="s0">#</span>
+<span class="s0"># Copyright (C) 2013-2026 Vinay Sajip.</span>
+<span class="s0"># Licensed to the Python Software Foundation under a contributor agreement.</span>
+<span class="s0"># See LICENSE.txt and CONTRIBUTORS.txt.</span>
+<span class="s0">#</span>
+<span class="s2">from </span><span class="s1">__future__ </span><span class="s2">import </span><span class="s1">unicode_literals</span>
+
+<span class="s2">import </span><span class="s1">bisect</span>
+<span class="s2">import </span><span class="s1">io</span>
+<span class="s2">import </span><span class="s1">logging</span>
+<span class="s2">import </span><span class="s1">os</span>
+<span class="s2">import </span><span class="s1">pkgutil</span>
+<span class="s2">import </span><span class="s1">sys</span>
+<span class="s2">import </span><span class="s1">types</span>
+<span class="s2">import </span><span class="s1">zipimport</span>
+
+<span class="s2">from </span><span class="s1">. </span><span class="s2">import </span><span class="s1">DistlibException</span>
+<span class="s2">from </span><span class="s1">.util </span><span class="s2">import </span><span class="s1">cached_property, get_cache_base, Cache</span>
+
+<span class="s1">logger = logging.getLogger(__name__)</span>
+
+<span class="s1">cache = </span><span class="s2">None  </span><span class="s0"># created when needed</span>
+
+
+<span class="s2">class </span><span class="s1">ResourceCache(Cache):</span>
+
+    <span class="s2">def </span><span class="s1">__init__(self, base=</span><span class="s2">None</span><span class="s1">):</span>
+        <span class="s2">if </span><span class="s1">base </span><span class="s2">is None</span><span class="s1">:</span>
+            <span class="s0"># Use native string to avoid issues on 2.x: see Python #20140.</span>
+            <span class="s1">base = os.path.join(get_cache_base(), str(</span><span class="s3">'resource-cache'</span><span class="s1">))</span>
+        <span class="s1">super(ResourceCache, self).__init__(base)</span>
+
+    <span class="s2">def </span><span class="s1">is_stale(self, resource, path):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        Is the cache stale for the given resource? 
+ 
+        :param resource: The :class:`Resource` being cached. 
+        :param path: The path of the resource in the cache. 
+        :return: True if the cache is stale. 
+        &quot;&quot;&quot;</span>
+        <span class="s0"># Cache invalidation is a hard problem :-)</span>
+        <span class="s2">return True</span>
+
+    <span class="s2">def </span><span class="s1">get(self, resource):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        Get a resource into the cache, 
+ 
+        :param resource: A :class:`Resource` instance. 
+        :return: The pathname of the resource in the cache. 
+        &quot;&quot;&quot;</span>
+        <span class="s1">prefix, path = resource.finder.get_cache_info(resource)</span>
+        <span class="s2">if </span><span class="s1">prefix </span><span class="s2">is None</span><span class="s1">:</span>
+            <span class="s1">result = path</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s1">result = os.path.join(self.base, self.prefix_to_dir(prefix), path)</span>
+            <span class="s1">dirname = os.path.dirname(result)</span>
+            <span class="s2">if not </span><span class="s1">os.path.isdir(dirname):</span>
+                <span class="s1">os.makedirs(dirname)</span>
+            <span class="s2">if not </span><span class="s1">os.path.exists(result):</span>
+                <span class="s1">stale = </span><span class="s2">True</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s1">stale = self.is_stale(resource, path)</span>
+            <span class="s2">if </span><span class="s1">stale:</span>
+                <span class="s0"># write the bytes of the resource to the cache location</span>
+                <span class="s2">with </span><span class="s1">open(result, </span><span class="s3">'wb'</span><span class="s1">) </span><span class="s2">as </span><span class="s1">f:</span>
+                    <span class="s1">f.write(resource.bytes)</span>
+        <span class="s2">return </span><span class="s1">result</span>
+
+
+<span class="s2">class </span><span class="s1">ResourceBase(object):</span>
+
+    <span class="s2">def </span><span class="s1">__init__(self, finder, name):</span>
+        <span class="s1">self.finder = finder</span>
+        <span class="s1">self.name = name</span>
+
+
+<span class="s2">class </span><span class="s1">Resource(ResourceBase):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    A class representing an in-package resource, such as a data file. This is 
+    not normally instantiated by user code, but rather by a 
+    :class:`ResourceFinder` which manages the resource. 
+    &quot;&quot;&quot;</span>
+    <span class="s1">is_container = </span><span class="s2">False  </span><span class="s0"># Backwards compatibility</span>
+
+    <span class="s2">def </span><span class="s1">as_stream(self):</span>
+        <span class="s0">&quot;&quot;&quot; 
+        Get the resource as a stream. 
+ 
+        This is not a property to make it obvious that it returns a new stream 
+        each time. 
+        &quot;&quot;&quot;</span>
+        <span class="s2">return </span><span class="s1">self.finder.get_stream(self)</span>
+
+    <span class="s1">@cached_property</span>
+    <span class="s2">def </span><span class="s1">file_path(self):</span>
+        <span class="s2">global </span><span class="s1">cache</span>
+        <span class="s2">if </span><span class="s1">cache </span><span class="s2">is None</span><span class="s1">:</span>
+            <span class="s1">cache = ResourceCache()</span>
+        <span class="s2">return </span><span class="s1">cache.get(self)</span>
+
+    <span class="s1">@cached_property</span>
+    <span class="s2">def </span><span class="s1">bytes(self):</span>
+        <span class="s2">return </span><span class="s1">self.finder.get_bytes(self)</span>
+
+    <span class="s1">@cached_property</span>
+    <span class="s2">def </span><span class="s1">size(self):</span>
+        <span class="s2">return </span><span class="s1">self.finder.get_size(self)</span>
+
+
+<span class="s2">class </span><span class="s1">ResourceContainer(ResourceBase):</span>
+    <span class="s1">is_container = </span><span class="s2">True  </span><span class="s0"># Backwards compatibility</span>
+
+    <span class="s1">@cached_property</span>
+    <span class="s2">def </span><span class="s1">resources(self):</span>
+        <span class="s2">return </span><span class="s1">self.finder.get_resources(self)</span>
+
+
+<span class="s2">class </span><span class="s1">ResourceFinder(object):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Resource finder for file system resources. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s2">if </span><span class="s1">sys.platform.startswith(</span><span class="s3">'java'</span><span class="s1">):</span>
+        <span class="s1">skipped_extensions = (</span><span class="s3">'.pyc'</span><span class="s1">, </span><span class="s3">'.pyo'</span><span class="s1">, </span><span class="s3">'.class'</span><span class="s1">)</span>
+    <span class="s2">else</span><span class="s1">:</span>
+        <span class="s1">skipped_extensions = (</span><span class="s3">'.pyc'</span><span class="s1">, </span><span class="s3">'.pyo'</span><span class="s1">)</span>
+
+    <span class="s2">def </span><span class="s1">__init__(self, module):</span>
+        <span class="s1">self.module = module</span>
+        <span class="s1">self.loader = getattr(module, </span><span class="s3">'__loader__'</span><span class="s1">, </span><span class="s2">None</span><span class="s1">)</span>
+        <span class="s1">self.base = os.path.dirname(getattr(module, </span><span class="s3">'__file__'</span><span class="s1">, </span><span class="s3">''</span><span class="s1">))</span>
+
+    <span class="s2">def </span><span class="s1">_adjust_path(self, path):</span>
+        <span class="s2">return </span><span class="s1">os.path.realpath(path)</span>
+
+    <span class="s2">def </span><span class="s1">_is_in_base(self, path):</span>
+        <span class="s1">base = self._adjust_path(self.base)</span>
+        <span class="s2">if </span><span class="s1">path == base:</span>
+            <span class="s2">return True</span>
+        <span class="s2">if not </span><span class="s1">base.endswith(os.sep):</span>
+            <span class="s1">base = base + os.sep</span>
+        <span class="s2">return </span><span class="s1">path.startswith(base)</span>
+
+    <span class="s2">def </span><span class="s1">_make_path(self, resource_name):</span>
+        <span class="s0"># Issue #50: need to preserve type of path on Python 2.x</span>
+        <span class="s0"># like os.path._get_sep</span>
+        <span class="s2">if </span><span class="s1">isinstance(resource_name, bytes):  </span><span class="s0"># should only happen on 2.x</span>
+            <span class="s1">sep = </span><span class="s4">b'/'</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s1">sep = </span><span class="s3">'/'</span>
+        <span class="s1">parts = resource_name.split(sep)</span>
+        <span class="s1">parts.insert(</span><span class="s5">0</span><span class="s1">, self.base)</span>
+        <span class="s1">result = os.path.join(*parts)</span>
+        <span class="s1">result = self._adjust_path(result)</span>
+        <span class="s0"># Confine the resolved resource to the package base so a resource</span>
+        <span class="s0"># name containing '..' cannot read files outside the package.</span>
+        <span class="s2">if not </span><span class="s1">self._is_in_base(result):</span>
+            <span class="s2">raise </span><span class="s1">DistlibException(</span><span class="s3">'Resource name escapes package: '</span>
+                                   <span class="s3">'%r' </span><span class="s1">% resource_name)</span>
+        <span class="s2">return </span><span class="s1">result</span>
+
+    <span class="s2">def </span><span class="s1">_find(self, path):</span>
+        <span class="s2">return </span><span class="s1">os.path.exists(path)</span>
+
+    <span class="s2">def </span><span class="s1">get_cache_info(self, resource):</span>
+        <span class="s2">return None</span><span class="s1">, resource.path</span>
+
+    <span class="s2">def </span><span class="s1">find(self, resource_name):</span>
+        <span class="s1">path = self._make_path(resource_name)</span>
+        <span class="s2">if not </span><span class="s1">self._find(path):</span>
+            <span class="s1">result = </span><span class="s2">None</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s2">if </span><span class="s1">self._is_directory(path):</span>
+                <span class="s1">result = ResourceContainer(self, resource_name)</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s1">result = Resource(self, resource_name)</span>
+            <span class="s1">result.path = path</span>
+        <span class="s2">return </span><span class="s1">result</span>
+
+    <span class="s2">def </span><span class="s1">get_stream(self, resource):</span>
+        <span class="s2">return </span><span class="s1">open(resource.path, </span><span class="s3">'rb'</span><span class="s1">)</span>
+
+    <span class="s2">def </span><span class="s1">get_bytes(self, resource):</span>
+        <span class="s2">with </span><span class="s1">open(resource.path, </span><span class="s3">'rb'</span><span class="s1">) </span><span class="s2">as </span><span class="s1">f:</span>
+            <span class="s2">return </span><span class="s1">f.read()</span>
+
+    <span class="s2">def </span><span class="s1">get_size(self, resource):</span>
+        <span class="s2">return </span><span class="s1">os.path.getsize(resource.path)</span>
+
+    <span class="s2">def </span><span class="s1">get_resources(self, resource):</span>
+
+        <span class="s2">def </span><span class="s1">allowed(f):</span>
+            <span class="s2">return </span><span class="s1">(f != </span><span class="s3">'__pycache__' </span><span class="s2">and not </span><span class="s1">f.endswith(self.skipped_extensions))</span>
+
+        <span class="s2">return </span><span class="s1">set([f </span><span class="s2">for </span><span class="s1">f </span><span class="s2">in </span><span class="s1">os.listdir(resource.path) </span><span class="s2">if </span><span class="s1">allowed(f)])</span>
+
+    <span class="s2">def </span><span class="s1">is_container(self, resource):</span>
+        <span class="s2">return </span><span class="s1">self._is_directory(resource.path)</span>
+
+    <span class="s1">_is_directory = staticmethod(os.path.isdir)</span>
+
+    <span class="s2">def </span><span class="s1">iterator(self, resource_name):</span>
+        <span class="s1">resource = self.find(resource_name)</span>
+        <span class="s2">if </span><span class="s1">resource </span><span class="s2">is not None</span><span class="s1">:</span>
+            <span class="s1">todo = [resource]</span>
+            <span class="s2">while </span><span class="s1">todo:</span>
+                <span class="s1">resource = todo.pop(</span><span class="s5">0</span><span class="s1">)</span>
+                <span class="s2">yield </span><span class="s1">resource</span>
+                <span class="s2">if </span><span class="s1">resource.is_container:</span>
+                    <span class="s1">rname = resource.name</span>
+                    <span class="s2">for </span><span class="s1">name </span><span class="s2">in </span><span class="s1">resource.resources:</span>
+                        <span class="s2">if not </span><span class="s1">rname:</span>
+                            <span class="s1">new_name = name</span>
+                        <span class="s2">else</span><span class="s1">:</span>
+                            <span class="s1">new_name = </span><span class="s3">'/'</span><span class="s1">.join([rname, name])</span>
+                        <span class="s1">child = self.find(new_name)</span>
+                        <span class="s2">if </span><span class="s1">child.is_container:</span>
+                            <span class="s1">todo.append(child)</span>
+                        <span class="s2">else</span><span class="s1">:</span>
+                            <span class="s2">yield </span><span class="s1">child</span>
+
+
+<span class="s2">class </span><span class="s1">ZipResourceFinder(ResourceFinder):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Resource finder for resources in .zip files. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s2">def </span><span class="s1">__init__(self, module):</span>
+        <span class="s1">super(ZipResourceFinder, self).__init__(module)</span>
+        <span class="s1">archive = self.loader.archive</span>
+        <span class="s1">self.prefix_len = </span><span class="s5">1 </span><span class="s1">+ len(archive)</span>
+        <span class="s0"># PyPy doesn't have a _files attr on zipimporter, and you can't set one</span>
+        <span class="s2">if </span><span class="s1">hasattr(self.loader, </span><span class="s3">'_files'</span><span class="s1">):</span>
+            <span class="s1">self._files = self.loader._files</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s1">self._files = zipimport._zip_directory_cache[archive]</span>
+        <span class="s1">self.index = sorted(self._files)</span>
+
+    <span class="s2">def </span><span class="s1">_adjust_path(self, path):</span>
+        <span class="s2">return </span><span class="s1">path</span>
+
+    <span class="s2">def </span><span class="s1">_find(self, path):</span>
+        <span class="s1">path = path[self.prefix_len:]</span>
+        <span class="s2">if </span><span class="s1">path </span><span class="s2">in </span><span class="s1">self._files:</span>
+            <span class="s1">result = </span><span class="s2">True</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s2">if </span><span class="s1">path </span><span class="s2">and </span><span class="s1">path[-</span><span class="s5">1</span><span class="s1">] != os.sep:</span>
+                <span class="s1">path = path + os.sep</span>
+            <span class="s1">i = bisect.bisect(self.index, path)</span>
+            <span class="s2">try</span><span class="s1">:</span>
+                <span class="s1">result = self.index[i].startswith(path)</span>
+            <span class="s2">except </span><span class="s1">IndexError:</span>
+                <span class="s1">result = </span><span class="s2">False</span>
+        <span class="s2">if not </span><span class="s1">result:</span>
+            <span class="s1">logger.debug(</span><span class="s3">'_find failed: %r %r'</span><span class="s1">, path, self.loader.prefix)</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s1">logger.debug(</span><span class="s3">'_find worked: %r %r'</span><span class="s1">, path, self.loader.prefix)</span>
+        <span class="s2">return </span><span class="s1">result</span>
+
+    <span class="s2">def </span><span class="s1">get_cache_info(self, resource):</span>
+        <span class="s1">prefix = self.loader.archive</span>
+        <span class="s1">path = resource.path[</span><span class="s5">1 </span><span class="s1">+ len(prefix):]</span>
+        <span class="s2">return </span><span class="s1">prefix, path</span>
+
+    <span class="s2">def </span><span class="s1">get_bytes(self, resource):</span>
+        <span class="s2">return </span><span class="s1">self.loader.get_data(resource.path)</span>
+
+    <span class="s2">def </span><span class="s1">get_stream(self, resource):</span>
+        <span class="s2">return </span><span class="s1">io.BytesIO(self.get_bytes(resource))</span>
+
+    <span class="s2">def </span><span class="s1">get_size(self, resource):</span>
+        <span class="s1">path = resource.path[self.prefix_len:]</span>
+        <span class="s2">return </span><span class="s1">self._files[path][</span><span class="s5">3</span><span class="s1">]</span>
+
+    <span class="s2">def </span><span class="s1">get_resources(self, resource):</span>
+        <span class="s1">path = resource.path[self.prefix_len:]</span>
+        <span class="s2">if </span><span class="s1">path </span><span class="s2">and </span><span class="s1">path[-</span><span class="s5">1</span><span class="s1">] != os.sep:</span>
+            <span class="s1">path += os.sep</span>
+        <span class="s1">plen = len(path)</span>
+        <span class="s1">result = set()</span>
+        <span class="s1">i = bisect.bisect(self.index, path)</span>
+        <span class="s2">while </span><span class="s1">i &lt; len(self.index):</span>
+            <span class="s2">if not </span><span class="s1">self.index[i].startswith(path):</span>
+                <span class="s2">break</span>
+            <span class="s1">s = self.index[i][plen:]</span>
+            <span class="s1">result.add(s.split(os.sep, </span><span class="s5">1</span><span class="s1">)[</span><span class="s5">0</span><span class="s1">])  </span><span class="s0"># only immediate children</span>
+            <span class="s1">i += </span><span class="s5">1</span>
+        <span class="s2">return </span><span class="s1">result</span>
+
+    <span class="s2">def </span><span class="s1">_is_directory(self, path):</span>
+        <span class="s1">path = path[self.prefix_len:]</span>
+        <span class="s2">if </span><span class="s1">path </span><span class="s2">and </span><span class="s1">path[-</span><span class="s5">1</span><span class="s1">] != os.sep:</span>
+            <span class="s1">path += os.sep</span>
+        <span class="s1">i = bisect.bisect(self.index, path)</span>
+        <span class="s2">try</span><span class="s1">:</span>
+            <span class="s1">result = self.index[i].startswith(path)</span>
+        <span class="s2">except </span><span class="s1">IndexError:</span>
+            <span class="s1">result = </span><span class="s2">False</span>
+        <span class="s2">return </span><span class="s1">result</span>
+
+
+<span class="s1">_finder_registry = {type(</span><span class="s2">None</span><span class="s1">): ResourceFinder, zipimport.zipimporter: ZipResourceFinder}</span>
+
+<span class="s2">try</span><span class="s1">:</span>
+    <span class="s0"># In Python 3.6, _frozen_importlib -&gt; _frozen_importlib_external</span>
+    <span class="s2">try</span><span class="s1">:</span>
+        <span class="s2">import </span><span class="s1">_frozen_importlib_external </span><span class="s2">as </span><span class="s1">_fi</span>
+    <span class="s2">except </span><span class="s1">ImportError:</span>
+        <span class="s2">import </span><span class="s1">_frozen_importlib </span><span class="s2">as </span><span class="s1">_fi</span>
+    <span class="s1">_finder_registry[_fi.SourceFileLoader] = ResourceFinder</span>
+    <span class="s1">_finder_registry[_fi.FileFinder] = ResourceFinder</span>
+    <span class="s0"># See issue #146</span>
+    <span class="s1">_finder_registry[_fi.SourcelessFileLoader] = ResourceFinder</span>
+    <span class="s2">del </span><span class="s1">_fi</span>
+<span class="s2">except </span><span class="s1">(ImportError, AttributeError):</span>
+    <span class="s2">pass</span>
+
+
+<span class="s2">def </span><span class="s1">register_finder(loader, finder_maker):</span>
+    <span class="s1">_finder_registry[type(loader)] = finder_maker</span>
+
+
+<span class="s1">_finder_cache = {}</span>
+
+
+<span class="s2">def </span><span class="s1">finder(package):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Return a resource finder for a package. 
+    :param package: The name of the package. 
+    :return: A :class:`ResourceFinder` instance for the package. 
+    &quot;&quot;&quot;</span>
+    <span class="s2">if </span><span class="s1">package </span><span class="s2">in </span><span class="s1">_finder_cache:</span>
+        <span class="s1">result = _finder_cache[package]</span>
+    <span class="s2">else</span><span class="s1">:</span>
+        <span class="s2">if </span><span class="s1">package </span><span class="s2">not in </span><span class="s1">sys.modules:</span>
+            <span class="s1">__import__(package)</span>
+        <span class="s1">module = sys.modules[package]</span>
+        <span class="s1">path = getattr(module, </span><span class="s3">'__path__'</span><span class="s1">, </span><span class="s2">None</span><span class="s1">)</span>
+        <span class="s2">if </span><span class="s1">path </span><span class="s2">is None</span><span class="s1">:</span>
+            <span class="s2">raise </span><span class="s1">DistlibException(</span><span class="s3">'You cannot get a finder for a module, '</span>
+                                   <span class="s3">'only for a package'</span><span class="s1">)</span>
+        <span class="s1">loader = getattr(module, </span><span class="s3">'__loader__'</span><span class="s1">, </span><span class="s2">None</span><span class="s1">)</span>
+        <span class="s1">finder_maker = _finder_registry.get(type(loader))</span>
+        <span class="s2">if </span><span class="s1">finder_maker </span><span class="s2">is None</span><span class="s1">:</span>
+            <span class="s2">raise </span><span class="s1">DistlibException(</span><span class="s3">'Unable to locate finder for %r' </span><span class="s1">% package)</span>
+        <span class="s1">result = finder_maker(module)</span>
+        <span class="s1">_finder_cache[package] = result</span>
+    <span class="s2">return </span><span class="s1">result</span>
+
+
+<span class="s1">_dummy_module = types.ModuleType(str(</span><span class="s3">'__dummy__'</span><span class="s1">))</span>
+
+
+<span class="s2">def </span><span class="s1">finder_for_path(path):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Return a resource finder for a path, which should represent a container. 
+ 
+    :param path: The path. 
+    :return: A :class:`ResourceFinder` instance for the path. 
+    &quot;&quot;&quot;</span>
+    <span class="s1">result = </span><span class="s2">None</span>
+    <span class="s0"># calls any path hooks, gets importer into cache</span>
+    <span class="s1">pkgutil.get_importer(path)</span>
+    <span class="s1">loader = sys.path_importer_cache.get(path)</span>
+    <span class="s1">finder = _finder_registry.get(type(loader))</span>
+    <span class="s2">if </span><span class="s1">finder:</span>
+        <span class="s1">module = _dummy_module</span>
+        <span class="s1">module.__file__ = os.path.join(path, </span><span class="s3">''</span><span class="s1">)</span>
+        <span class="s1">module.__loader__ = loader</span>
+        <span class="s1">result = finder(module)</span>
+    <span class="s2">return </span><span class="s1">result</span>
+</pre>
+</body>
+</html>

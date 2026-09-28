@@ -1,0 +1,179 @@
+<html>
+<head>
+<title>__init__.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #8c8c8c; font-style: italic;}
+.s1 { color: #080808;}
+.s2 { color: #0033b3;}
+.s3 { color: #067d17;}
+.s4 { color: #1750eb;}
+.s5 { color: #0037a6;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+__init__.py</font>
+</center></td></tr></table>
+<pre><span class="s0">&quot;&quot;&quot; 
+    pygments.formatters 
+    ~~~~~~~~~~~~~~~~~~~ 
+ 
+    Pygments formatters. 
+ 
+    :copyright: Copyright 2006-present by the Pygments team, see AUTHORS. 
+    :license: BSD, see LICENSE for details. 
+&quot;&quot;&quot;</span>
+
+<span class="s2">import </span><span class="s1">re</span>
+<span class="s2">import </span><span class="s1">sys</span>
+<span class="s2">import </span><span class="s1">types</span>
+<span class="s2">import </span><span class="s1">fnmatch</span>
+<span class="s2">from </span><span class="s1">os.path </span><span class="s2">import </span><span class="s1">basename</span>
+
+<span class="s2">from </span><span class="s1">pip._vendor.pygments.formatters._mapping </span><span class="s2">import </span><span class="s1">FORMATTERS</span>
+<span class="s2">from </span><span class="s1">pip._vendor.pygments.plugin </span><span class="s2">import </span><span class="s1">find_plugin_formatters</span>
+<span class="s2">from </span><span class="s1">pip._vendor.pygments.util </span><span class="s2">import </span><span class="s1">ClassNotFound</span>
+
+<span class="s1">__all__ = [</span><span class="s3">'get_formatter_by_name'</span><span class="s1">, </span><span class="s3">'get_formatter_for_filename'</span><span class="s1">,</span>
+           <span class="s3">'get_all_formatters'</span><span class="s1">, </span><span class="s3">'load_formatter_from_file'</span><span class="s1">] + list(FORMATTERS)</span>
+
+<span class="s1">_formatter_cache = {}  </span><span class="s0"># classes by name</span>
+<span class="s1">_pattern_cache = {}</span>
+
+
+<span class="s2">def </span><span class="s1">_fn_matches(fn, glob):</span>
+    <span class="s0">&quot;&quot;&quot;Return whether the supplied file name fn matches pattern filename.&quot;&quot;&quot;</span>
+    <span class="s2">if </span><span class="s1">glob </span><span class="s2">not in </span><span class="s1">_pattern_cache:</span>
+        <span class="s1">pattern = _pattern_cache[glob] = re.compile(fnmatch.translate(glob))</span>
+        <span class="s2">return </span><span class="s1">pattern.match(fn)</span>
+    <span class="s2">return </span><span class="s1">_pattern_cache[glob].match(fn)</span>
+
+
+<span class="s2">def </span><span class="s1">_load_formatters(module_name):</span>
+    <span class="s0">&quot;&quot;&quot;Load a formatter (and all others in the module too).&quot;&quot;&quot;</span>
+    <span class="s1">mod = __import__(module_name, </span><span class="s2">None</span><span class="s1">, </span><span class="s2">None</span><span class="s1">, [</span><span class="s3">'__all__'</span><span class="s1">])</span>
+    <span class="s2">for </span><span class="s1">formatter_name </span><span class="s2">in </span><span class="s1">mod.__all__:</span>
+        <span class="s1">cls = getattr(mod, formatter_name)</span>
+        <span class="s1">_formatter_cache[cls.name] = cls</span>
+
+
+<span class="s2">def </span><span class="s1">get_all_formatters():</span>
+    <span class="s0">&quot;&quot;&quot;Return a generator for all formatter classes.&quot;&quot;&quot;</span>
+    <span class="s0"># NB: this returns formatter classes, not info like get_all_lexers().</span>
+    <span class="s2">for </span><span class="s1">info </span><span class="s2">in </span><span class="s1">FORMATTERS.values():</span>
+        <span class="s2">if </span><span class="s1">info[</span><span class="s4">1</span><span class="s1">] </span><span class="s2">not in </span><span class="s1">_formatter_cache:</span>
+            <span class="s1">_load_formatters(info[</span><span class="s4">0</span><span class="s1">])</span>
+        <span class="s2">yield </span><span class="s1">_formatter_cache[info[</span><span class="s4">1</span><span class="s1">]]</span>
+    <span class="s2">for </span><span class="s1">_, formatter </span><span class="s2">in </span><span class="s1">find_plugin_formatters():</span>
+        <span class="s2">yield </span><span class="s1">formatter</span>
+
+
+<span class="s2">def </span><span class="s1">find_formatter_class(alias):</span>
+    <span class="s0">&quot;&quot;&quot;Lookup a formatter by alias. 
+ 
+    Returns None if not found. 
+    &quot;&quot;&quot;</span>
+    <span class="s2">for </span><span class="s1">module_name, name, aliases, _, _ </span><span class="s2">in </span><span class="s1">FORMATTERS.values():</span>
+        <span class="s2">if </span><span class="s1">alias </span><span class="s2">in </span><span class="s1">aliases:</span>
+            <span class="s2">if </span><span class="s1">name </span><span class="s2">not in </span><span class="s1">_formatter_cache:</span>
+                <span class="s1">_load_formatters(module_name)</span>
+            <span class="s2">return </span><span class="s1">_formatter_cache[name]</span>
+    <span class="s2">for </span><span class="s1">_, cls </span><span class="s2">in </span><span class="s1">find_plugin_formatters():</span>
+        <span class="s2">if </span><span class="s1">alias </span><span class="s2">in </span><span class="s1">cls.aliases:</span>
+            <span class="s2">return </span><span class="s1">cls</span>
+
+
+<span class="s2">def </span><span class="s1">get_formatter_by_name(_alias, **options):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Return an instance of a :class:`.Formatter` subclass that has `alias` in its 
+    aliases list. The formatter is given the `options` at its instantiation. 
+ 
+    Will raise :exc:`pygments.util.ClassNotFound` if no formatter with that 
+    alias is found. 
+    &quot;&quot;&quot;</span>
+    <span class="s1">cls = find_formatter_class(_alias)</span>
+    <span class="s2">if </span><span class="s1">cls </span><span class="s2">is None</span><span class="s1">:</span>
+        <span class="s2">raise </span><span class="s1">ClassNotFound(</span><span class="s3">f&quot;no formatter found for name </span><span class="s5">{</span><span class="s1">_alias</span><span class="s5">!r}</span><span class="s3">&quot;</span><span class="s1">)</span>
+    <span class="s2">return </span><span class="s1">cls(**options)</span>
+
+
+<span class="s2">def </span><span class="s1">load_formatter_from_file(filename, formattername=</span><span class="s3">&quot;CustomFormatter&quot;</span><span class="s1">, **options):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Return a `Formatter` subclass instance loaded from the provided file, relative 
+    to the current directory. 
+ 
+    The file is expected to contain a Formatter class named ``formattername`` 
+    (by default, CustomFormatter). Users should be very careful with the input, because 
+    this method is equivalent to running ``eval()`` on the input file. The formatter is 
+    given the `options` at its instantiation. 
+ 
+    :exc:`pygments.util.ClassNotFound` is raised if there are any errors loading 
+    the formatter. 
+ 
+    .. versionadded:: 2.2 
+    &quot;&quot;&quot;</span>
+    <span class="s2">try</span><span class="s1">:</span>
+        <span class="s0"># This empty dict will contain the namespace for the exec'd file</span>
+        <span class="s1">custom_namespace = {}</span>
+        <span class="s2">with </span><span class="s1">open(filename, </span><span class="s3">'rb'</span><span class="s1">) </span><span class="s2">as </span><span class="s1">f:</span>
+            <span class="s1">exec(f.read(), custom_namespace)</span>
+        <span class="s0"># Retrieve the class `formattername` from that namespace</span>
+        <span class="s2">if </span><span class="s1">formattername </span><span class="s2">not in </span><span class="s1">custom_namespace:</span>
+            <span class="s2">raise </span><span class="s1">ClassNotFound(</span><span class="s3">f'no valid </span><span class="s5">{</span><span class="s1">formattername</span><span class="s5">} </span><span class="s3">class found in </span><span class="s5">{</span><span class="s1">filename</span><span class="s5">}</span><span class="s3">'</span><span class="s1">)</span>
+        <span class="s1">formatter_class = custom_namespace[formattername]</span>
+        <span class="s0"># And finally instantiate it with the options</span>
+        <span class="s2">return </span><span class="s1">formatter_class(**options)</span>
+    <span class="s2">except </span><span class="s1">OSError </span><span class="s2">as </span><span class="s1">err:</span>
+        <span class="s2">raise </span><span class="s1">ClassNotFound(</span><span class="s3">f'cannot read </span><span class="s5">{</span><span class="s1">filename</span><span class="s5">}</span><span class="s3">: </span><span class="s5">{</span><span class="s1">err</span><span class="s5">}</span><span class="s3">'</span><span class="s1">)</span>
+    <span class="s2">except </span><span class="s1">ClassNotFound:</span>
+        <span class="s2">raise</span>
+    <span class="s2">except </span><span class="s1">Exception </span><span class="s2">as </span><span class="s1">err:</span>
+        <span class="s2">raise </span><span class="s1">ClassNotFound(</span><span class="s3">f'error when loading custom formatter: </span><span class="s5">{</span><span class="s1">err</span><span class="s5">}</span><span class="s3">'</span><span class="s1">)</span>
+
+
+<span class="s2">def </span><span class="s1">get_formatter_for_filename(fn, **options):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Return a :class:`.Formatter` subclass instance that has a filename pattern 
+    matching `fn`. The formatter is given the `options` at its instantiation. 
+ 
+    Will raise :exc:`pygments.util.ClassNotFound` if no formatter for that filename 
+    is found. 
+    &quot;&quot;&quot;</span>
+    <span class="s1">fn = basename(fn)</span>
+    <span class="s2">for </span><span class="s1">modname, name, _, filenames, _ </span><span class="s2">in </span><span class="s1">FORMATTERS.values():</span>
+        <span class="s2">for </span><span class="s1">filename </span><span class="s2">in </span><span class="s1">filenames:</span>
+            <span class="s2">if </span><span class="s1">_fn_matches(fn, filename):</span>
+                <span class="s2">if </span><span class="s1">name </span><span class="s2">not in </span><span class="s1">_formatter_cache:</span>
+                    <span class="s1">_load_formatters(modname)</span>
+                <span class="s2">return </span><span class="s1">_formatter_cache[name](**options)</span>
+    <span class="s2">for </span><span class="s1">_name, cls </span><span class="s2">in </span><span class="s1">find_plugin_formatters():</span>
+        <span class="s2">for </span><span class="s1">filename </span><span class="s2">in </span><span class="s1">cls.filenames:</span>
+            <span class="s2">if </span><span class="s1">_fn_matches(fn, filename):</span>
+                <span class="s2">return </span><span class="s1">cls(**options)</span>
+    <span class="s2">raise </span><span class="s1">ClassNotFound(</span><span class="s3">f&quot;no formatter found for file name </span><span class="s5">{</span><span class="s1">fn</span><span class="s5">!r}</span><span class="s3">&quot;</span><span class="s1">)</span>
+
+
+<span class="s2">class </span><span class="s1">_automodule(types.ModuleType):</span>
+    <span class="s0">&quot;&quot;&quot;Automatically import formatters.&quot;&quot;&quot;</span>
+
+    <span class="s2">def </span><span class="s1">__getattr__(self, name):</span>
+        <span class="s1">info = FORMATTERS.get(name)</span>
+        <span class="s2">if </span><span class="s1">info:</span>
+            <span class="s1">_load_formatters(info[</span><span class="s4">0</span><span class="s1">])</span>
+            <span class="s1">cls = _formatter_cache[info[</span><span class="s4">1</span><span class="s1">]]</span>
+            <span class="s1">setattr(self, name, cls)</span>
+            <span class="s2">return </span><span class="s1">cls</span>
+        <span class="s2">raise </span><span class="s1">AttributeError(name)</span>
+
+
+<span class="s1">oldmod = sys.modules[__name__]</span>
+<span class="s1">newmod = _automodule(__name__)</span>
+<span class="s1">newmod.__dict__.update(oldmod.__dict__)</span>
+<span class="s1">sys.modules[__name__] = newmod</span>
+<span class="s2">del </span><span class="s1">newmod.newmod, newmod.oldmod, newmod.sys, newmod.types</span>
+</pre>
+</body>
+</html>

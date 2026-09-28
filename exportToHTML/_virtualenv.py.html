@@ -1,0 +1,144 @@
+<html>
+<head>
+<title>_virtualenv.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #8c8c8c; font-style: italic;}
+.s1 { color: #080808;}
+.s2 { color: #0033b3;}
+.s3 { color: #067d17;}
+.s4 { color: #0037a6;}
+.s5 { color: #1750eb;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+_virtualenv.py</font>
+</center></td></tr></table>
+<pre><span class="s0">&quot;&quot;&quot;Patches that are applied at runtime to the virtual environment.&quot;&quot;&quot;</span>
+
+<span class="s2">from </span><span class="s1">__future__ </span><span class="s2">import </span><span class="s1">annotations</span>
+
+<span class="s2">import </span><span class="s1">contextlib</span>
+<span class="s2">import </span><span class="s1">os</span>
+<span class="s2">import </span><span class="s1">sys</span>
+
+<span class="s1">VIRTUALENV_PATCH_FILE = os.path.abspath(__file__)</span>
+
+
+<span class="s2">def </span><span class="s1">patch_dist(dist):</span>
+    <span class="s0">&quot;&quot;&quot;Distutils allows user to configure some arguments via a configuration file: https://docs.python.org/3/install/index.html#distutils-configuration-files. 
+ 
+    Some of this arguments though don't make sense in context of the virtual environment files, let's fix them up. 
+ 
+    &quot;&quot;&quot;</span>
+    <span class="s0"># we cannot allow some install config as that would get packages installed outside of the virtual environment</span>
+    <span class="s1">old_parse_config_files = dist.Distribution.parse_config_files</span>
+
+    <span class="s2">def </span><span class="s1">parse_config_files(self, *args, **kwargs):</span>
+        <span class="s1">result = old_parse_config_files(self, *args, **kwargs)</span>
+        <span class="s1">install = self.get_option_dict(</span><span class="s3">&quot;install&quot;</span><span class="s1">)</span>
+
+        <span class="s2">if </span><span class="s3">&quot;prefix&quot; </span><span class="s2">in </span><span class="s1">install:  </span><span class="s0"># the prefix governs where to install the libraries</span>
+            <span class="s1">install[</span><span class="s3">&quot;prefix&quot;</span><span class="s1">] = VIRTUALENV_PATCH_FILE, os.path.abspath(sys.prefix)</span>
+        <span class="s2">for </span><span class="s1">base </span><span class="s2">in </span><span class="s1">(</span><span class="s3">&quot;purelib&quot;</span><span class="s1">, </span><span class="s3">&quot;platlib&quot;</span><span class="s1">, </span><span class="s3">&quot;headers&quot;</span><span class="s1">, </span><span class="s3">&quot;scripts&quot;</span><span class="s1">, </span><span class="s3">&quot;data&quot;</span><span class="s1">):</span>
+            <span class="s1">key = </span><span class="s3">f&quot;install_</span><span class="s4">{</span><span class="s1">base</span><span class="s4">}</span><span class="s3">&quot;</span>
+            <span class="s2">if </span><span class="s1">key </span><span class="s2">in </span><span class="s1">install:  </span><span class="s0"># do not allow global configs to hijack venv paths</span>
+                <span class="s1">install.pop(key, </span><span class="s2">None</span><span class="s1">)</span>
+        <span class="s2">return </span><span class="s1">result</span>
+
+    <span class="s1">dist.Distribution.parse_config_files = parse_config_files</span>
+
+
+<span class="s0"># Import hook that patches some modules to ignore configuration values that break package installation in case</span>
+<span class="s0"># of virtual environments.</span>
+<span class="s1">_DISTUTILS_PATCH = </span><span class="s3">&quot;distutils.dist&quot;</span><span class="s1">, </span><span class="s3">&quot;setuptools.dist&quot;</span>
+<span class="s0"># https://docs.python.org/3/library/importlib.html#setting-up-an-importer</span>
+
+
+<span class="s2">class </span><span class="s1">_Finder:</span>
+    <span class="s0">&quot;&quot;&quot;A meta path finder that allows patching the imported distutils modules.&quot;&quot;&quot;</span>
+
+    <span class="s1">fullname = </span><span class="s2">None</span>
+
+    <span class="s0"># lock[0] is threading.Lock(), but initialized lazily to avoid importing threading very early at startup,</span>
+    <span class="s0"># because there are gevent-based applications that need to be first to import threading by themselves.</span>
+    <span class="s0"># See https://github.com/pypa/virtualenv/issues/1895 for details.</span>
+    <span class="s1">lock = []  </span><span class="s0"># noqa: RUF012</span>
+
+    <span class="s2">def </span><span class="s1">find_spec(self, fullname, path, target=</span><span class="s2">None</span><span class="s1">):  </span><span class="s0"># noqa: ARG002</span>
+        <span class="s0"># Guard against race conditions during file rewrite by checking if _DISTUTILS_PATCH is defined.</span>
+        <span class="s0"># This can happen when the file is being overwritten while it's being imported by another process.</span>
+        <span class="s0"># See https://github.com/pypa/virtualenv/issues/2969 for details.</span>
+        <span class="s2">try</span><span class="s1">:</span>
+            <span class="s1">distutils_patch = _DISTUTILS_PATCH</span>
+        <span class="s2">except </span><span class="s1">NameError:</span>
+            <span class="s2">return None</span>
+        <span class="s2">if </span><span class="s1">fullname </span><span class="s2">in </span><span class="s1">distutils_patch </span><span class="s2">and </span><span class="s1">self.fullname </span><span class="s2">is None</span><span class="s1">:  </span><span class="s0"># noqa: PLR1702</span>
+            <span class="s0"># initialize lock[0] lazily</span>
+            <span class="s2">if </span><span class="s1">len(self.lock) == </span><span class="s5">0</span><span class="s1">:</span>
+                <span class="s2">import </span><span class="s1">threading  </span><span class="s0"># noqa: PLC0415</span>
+
+                <span class="s1">lock = threading.Lock()</span>
+                <span class="s0"># there is possibility that two threads T1 and T2 are simultaneously running into find_spec,</span>
+                <span class="s0"># observing .lock as empty, and further going into hereby initialization. However due to the GIL,</span>
+                <span class="s0"># list.append() operation is atomic and this way only one of the threads will &quot;win&quot; to put the lock</span>
+                <span class="s0"># - that every thread will use - into .lock[0].</span>
+                <span class="s0"># https://docs.python.org/3/faq/library.html#what-kinds-of-global-value-mutation-are-thread-safe</span>
+                <span class="s1">self.lock.append(lock)</span>
+
+            <span class="s2">from </span><span class="s1">functools </span><span class="s2">import </span><span class="s1">partial  </span><span class="s0"># noqa: PLC0415</span>
+            <span class="s2">from </span><span class="s1">importlib.util </span><span class="s2">import </span><span class="s1">find_spec  </span><span class="s0"># noqa: PLC0415</span>
+
+            <span class="s2">with </span><span class="s1">self.lock[</span><span class="s5">0</span><span class="s1">]:</span>
+                <span class="s1">self.fullname = fullname</span>
+                <span class="s2">try</span><span class="s1">:</span>
+                    <span class="s1">spec = find_spec(fullname, path)</span>
+                    <span class="s2">if </span><span class="s1">spec </span><span class="s2">is not None</span><span class="s1">:</span>
+                        <span class="s0"># https://www.python.org/dev/peps/pep-0451/#how-loading-will-work</span>
+                        <span class="s1">is_new_api = hasattr(spec.loader, </span><span class="s3">&quot;exec_module&quot;</span><span class="s1">)</span>
+                        <span class="s1">func_name = </span><span class="s3">&quot;exec_module&quot; </span><span class="s2">if </span><span class="s1">is_new_api </span><span class="s2">else </span><span class="s3">&quot;load_module&quot;</span>
+                        <span class="s1">old = getattr(spec.loader, func_name)</span>
+                        <span class="s1">func = self.exec_module </span><span class="s2">if </span><span class="s1">is_new_api </span><span class="s2">else </span><span class="s1">self.load_module</span>
+                        <span class="s2">if </span><span class="s1">old </span><span class="s2">is not </span><span class="s1">func:</span>
+                            <span class="s2">try</span><span class="s1">:  </span><span class="s0"># noqa: SIM105</span>
+                                <span class="s1">setattr(spec.loader, func_name, partial(func, old))</span>
+                            <span class="s2">except </span><span class="s1">AttributeError:</span>
+                                <span class="s2">pass  </span><span class="s0"># C-Extension loaders are r/o such as zipimporter with &lt;3.7</span>
+                        <span class="s2">return </span><span class="s1">spec</span>
+                <span class="s2">finally</span><span class="s1">:</span>
+                    <span class="s1">self.fullname = </span><span class="s2">None</span>
+        <span class="s2">return None</span>
+
+    <span class="s1">@staticmethod</span>
+    <span class="s2">def </span><span class="s1">exec_module(old, module):</span>
+        <span class="s1">old(module)</span>
+        <span class="s2">try</span><span class="s1">:</span>
+            <span class="s1">distutils_patch = _DISTUTILS_PATCH</span>
+        <span class="s2">except </span><span class="s1">NameError:</span>
+            <span class="s2">return</span>
+        <span class="s2">if </span><span class="s1">module.__name__ </span><span class="s2">in </span><span class="s1">distutils_patch:</span>
+            <span class="s0"># patch_dist or its dependencies may not be defined during file rewrite</span>
+            <span class="s2">with </span><span class="s1">contextlib.suppress(NameError):</span>
+                <span class="s1">patch_dist(module)</span>
+
+    <span class="s1">@staticmethod</span>
+    <span class="s2">def </span><span class="s1">load_module(old, name):</span>
+        <span class="s1">module = old(name)</span>
+        <span class="s2">try</span><span class="s1">:</span>
+            <span class="s1">distutils_patch = _DISTUTILS_PATCH</span>
+        <span class="s2">except </span><span class="s1">NameError:</span>
+            <span class="s2">return </span><span class="s1">module</span>
+        <span class="s2">if </span><span class="s1">module.__name__ </span><span class="s2">in </span><span class="s1">distutils_patch:</span>
+            <span class="s0"># patch_dist or its dependencies may not be defined during file rewrite</span>
+            <span class="s2">with </span><span class="s1">contextlib.suppress(NameError):</span>
+                <span class="s1">patch_dist(module)</span>
+        <span class="s2">return </span><span class="s1">module</span>
+
+
+<span class="s1">sys.meta_path.insert(</span><span class="s5">0</span><span class="s1">, _Finder())</span>
+</pre>
+</body>
+</html>

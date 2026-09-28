@@ -1,0 +1,182 @@
+<html>
+<head>
+<title>codec.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #0033b3;}
+.s1 { color: #080808;}
+.s2 { color: #8c8c8c; font-style: italic;}
+.s3 { color: #067d17;}
+.s4 { color: #0037a6;}
+.s5 { color: #8a822d;}
+.s6 { color: #1750eb;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+codec.py</font>
+</center></td></tr></table>
+<pre><span class="s0">import </span><span class="s1">codecs</span>
+<span class="s0">from </span><span class="s1">typing </span><span class="s0">import </span><span class="s1">Any, Optional</span>
+
+<span class="s0">from </span><span class="s1">.core </span><span class="s0">import </span><span class="s1">IDNAError, _unicode_dots_re, alabel, decode, encode, ulabel</span>
+
+
+<span class="s0">class </span><span class="s1">Codec(codecs.Codec):</span>
+    <span class="s2">&quot;&quot;&quot;Stateless IDNA 2008 codec. 
+ 
+    Implements the :class:`codecs.Codec` protocol so that the whole-domain 
+    encoder (:func:`idna.encode`) and decoder (:func:`idna.decode`) are 
+    accessible through the standard codec machinery as ``&quot;idna2008&quot;``. 
+ 
+    Only the ``&quot;strict&quot;`` error handler is supported; any other handler 
+    raises :exc:`~idna.IDNAError`. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">encode(self, data: str, errors: str = </span><span class="s3">&quot;strict&quot;</span><span class="s1">) -&gt; tuple[bytes, int]:  </span><span class="s2"># ty: ignore[invalid-method-override]</span>
+        <span class="s0">if </span><span class="s1">errors != </span><span class="s3">&quot;strict&quot;</span><span class="s1">:</span>
+            <span class="s0">raise </span><span class="s1">IDNAError(</span><span class="s3">f'Unsupported error handling &quot;</span><span class="s4">{</span><span class="s1">errors</span><span class="s4">}</span><span class="s3">&quot;'</span><span class="s1">)</span>
+
+        <span class="s0">if not </span><span class="s1">data:</span>
+            <span class="s0">return </span><span class="s5">b&quot;&quot;</span><span class="s1">, </span><span class="s6">0</span>
+
+        <span class="s0">return </span><span class="s1">encode(data), len(data)</span>
+
+    <span class="s0">def </span><span class="s1">decode(self, data: bytes, errors: str = </span><span class="s3">&quot;strict&quot;</span><span class="s1">) -&gt; tuple[str, int]:  </span><span class="s2"># ty: ignore[invalid-method-override]</span>
+        <span class="s0">if </span><span class="s1">errors != </span><span class="s3">&quot;strict&quot;</span><span class="s1">:</span>
+            <span class="s0">raise </span><span class="s1">IDNAError(</span><span class="s3">f'Unsupported error handling &quot;</span><span class="s4">{</span><span class="s1">errors</span><span class="s4">}</span><span class="s3">&quot;'</span><span class="s1">)</span>
+
+        <span class="s0">if not </span><span class="s1">data:</span>
+            <span class="s0">return </span><span class="s3">&quot;&quot;</span><span class="s1">, </span><span class="s6">0</span>
+
+        <span class="s0">return </span><span class="s1">decode(data), len(data)</span>
+
+
+<span class="s0">class </span><span class="s1">IncrementalEncoder(codecs.BufferedIncrementalEncoder):</span>
+    <span class="s2">&quot;&quot;&quot;Incremental IDNA 2008 encoder. 
+ 
+    Buffers a partial trailing label across calls until either the next 
+    label separator is seen or ``final=True``, so that streamed input is 
+    encoded one whole label at a time. Any of the four Unicode label 
+    separators (``U+002E``, ``U+3002``, ``U+FF0E``, ``U+FF61``) ends a 
+    label; the result always uses ``U+002E`` as the separator. 
+ 
+    Only the ``&quot;strict&quot;`` error handler is supported. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">_buffer_encode(self, data: str, errors: str, final: bool) -&gt; tuple[bytes, int]:  </span><span class="s2"># ty: ignore[invalid-method-override]</span>
+        <span class="s0">if </span><span class="s1">errors != </span><span class="s3">&quot;strict&quot;</span><span class="s1">:</span>
+            <span class="s0">raise </span><span class="s1">IDNAError(</span><span class="s3">f'Unsupported error handling &quot;</span><span class="s4">{</span><span class="s1">errors</span><span class="s4">}</span><span class="s3">&quot;'</span><span class="s1">)</span>
+
+        <span class="s0">if not </span><span class="s1">data:</span>
+            <span class="s0">return </span><span class="s5">b&quot;&quot;</span><span class="s1">, </span><span class="s6">0</span>
+
+        <span class="s1">labels = _unicode_dots_re.split(data)</span>
+        <span class="s1">trailing_dot = </span><span class="s5">b&quot;&quot;</span>
+        <span class="s0">if </span><span class="s1">labels:</span>
+            <span class="s0">if not </span><span class="s1">labels[-</span><span class="s6">1</span><span class="s1">]:</span>
+                <span class="s1">trailing_dot = </span><span class="s5">b&quot;.&quot;</span>
+                <span class="s0">del </span><span class="s1">labels[-</span><span class="s6">1</span><span class="s1">]</span>
+            <span class="s0">elif not </span><span class="s1">final:</span>
+                <span class="s2"># Keep potentially unfinished label until the next call</span>
+                <span class="s0">del </span><span class="s1">labels[-</span><span class="s6">1</span><span class="s1">]</span>
+                <span class="s0">if </span><span class="s1">labels:</span>
+                    <span class="s1">trailing_dot = </span><span class="s5">b&quot;.&quot;</span>
+
+        <span class="s1">result = []</span>
+        <span class="s1">size = </span><span class="s6">0</span>
+        <span class="s0">for </span><span class="s1">label </span><span class="s0">in </span><span class="s1">labels:</span>
+            <span class="s1">result.append(alabel(label))</span>
+            <span class="s0">if </span><span class="s1">size:</span>
+                <span class="s1">size += </span><span class="s6">1</span>
+            <span class="s1">size += len(label)</span>
+
+        <span class="s2"># Join with U+002E</span>
+        <span class="s1">result_bytes = </span><span class="s5">b&quot;.&quot;</span><span class="s1">.join(result) + trailing_dot</span>
+        <span class="s1">size += len(trailing_dot)</span>
+        <span class="s0">return </span><span class="s1">result_bytes, size</span>
+
+
+<span class="s0">class </span><span class="s1">IncrementalDecoder(codecs.BufferedIncrementalDecoder):</span>
+    <span class="s2">&quot;&quot;&quot;Incremental IDNA 2008 decoder. 
+ 
+    Buffers a partial trailing label across calls until either the next 
+    label separator is seen or ``final=True``, so that streamed input is 
+    decoded one whole label at a time. 
+ 
+    Only the ``&quot;strict&quot;`` error handler is supported. 
+    &quot;&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">_buffer_decode(self, data: Any, errors: str, final: bool) -&gt; tuple[str, int]:  </span><span class="s2"># ty: ignore[invalid-method-override]</span>
+        <span class="s0">if </span><span class="s1">errors != </span><span class="s3">&quot;strict&quot;</span><span class="s1">:</span>
+            <span class="s0">raise </span><span class="s1">IDNAError(</span><span class="s3">f'Unsupported error handling &quot;</span><span class="s4">{</span><span class="s1">errors</span><span class="s4">}</span><span class="s3">&quot;'</span><span class="s1">)</span>
+
+        <span class="s0">if not </span><span class="s1">data:</span>
+            <span class="s0">return </span><span class="s1">(</span><span class="s3">&quot;&quot;</span><span class="s1">, </span><span class="s6">0</span><span class="s1">)</span>
+
+        <span class="s0">if not </span><span class="s1">isinstance(data, str):</span>
+            <span class="s1">data = str(data, </span><span class="s3">&quot;ascii&quot;</span><span class="s1">)</span>
+
+        <span class="s1">labels = _unicode_dots_re.split(data)</span>
+        <span class="s1">trailing_dot = </span><span class="s3">&quot;&quot;</span>
+        <span class="s0">if </span><span class="s1">labels:</span>
+            <span class="s0">if not </span><span class="s1">labels[-</span><span class="s6">1</span><span class="s1">]:</span>
+                <span class="s1">trailing_dot = </span><span class="s3">&quot;.&quot;</span>
+                <span class="s0">del </span><span class="s1">labels[-</span><span class="s6">1</span><span class="s1">]</span>
+            <span class="s0">elif not </span><span class="s1">final:</span>
+                <span class="s2"># Keep potentially unfinished label until the next call</span>
+                <span class="s0">del </span><span class="s1">labels[-</span><span class="s6">1</span><span class="s1">]</span>
+                <span class="s0">if </span><span class="s1">labels:</span>
+                    <span class="s1">trailing_dot = </span><span class="s3">&quot;.&quot;</span>
+
+        <span class="s1">result = []</span>
+        <span class="s1">size = </span><span class="s6">0</span>
+        <span class="s0">for </span><span class="s1">label </span><span class="s0">in </span><span class="s1">labels:</span>
+            <span class="s1">result.append(ulabel(label))</span>
+            <span class="s0">if </span><span class="s1">size:</span>
+                <span class="s1">size += </span><span class="s6">1</span>
+            <span class="s1">size += len(label)</span>
+
+        <span class="s1">result_str = </span><span class="s3">&quot;.&quot;</span><span class="s1">.join(result) + trailing_dot</span>
+        <span class="s1">size += len(trailing_dot)</span>
+        <span class="s0">return </span><span class="s1">(result_str, size)</span>
+
+
+<span class="s0">class </span><span class="s1">StreamWriter(Codec, codecs.StreamWriter):</span>
+    <span class="s0">pass</span>
+
+
+<span class="s0">class </span><span class="s1">StreamReader(Codec, codecs.StreamReader):</span>
+    <span class="s0">pass</span>
+
+
+<span class="s0">def </span><span class="s1">search_function(name: str) -&gt; Optional[codecs.CodecInfo]:</span>
+    <span class="s2">&quot;&quot;&quot;Codec search function registered with :mod:`codecs`. 
+ 
+    Returns a :class:`codecs.CodecInfo` for the ``&quot;idna2008&quot;`` codec name 
+    so that ``str.encode(&quot;idna2008&quot;)`` and ``bytes.decode(&quot;idna2008&quot;)`` 
+    invoke the IDNA 2008 codec defined in this module. 
+ 
+    :param name: The codec name being looked up. 
+    :returns: A :class:`codecs.CodecInfo` instance if ``name`` is 
+        ``&quot;idna2008&quot;``, otherwise ``None``. 
+    &quot;&quot;&quot;</span>
+    <span class="s0">if </span><span class="s1">name != </span><span class="s3">&quot;idna2008&quot;</span><span class="s1">:</span>
+        <span class="s0">return None</span>
+    <span class="s0">return </span><span class="s1">codecs.CodecInfo(</span>
+        <span class="s1">name=name,</span>
+        <span class="s1">encode=Codec().encode,</span>
+        <span class="s1">decode=Codec().decode,  </span><span class="s2"># type: ignore</span>
+        <span class="s1">incrementalencoder=IncrementalEncoder,</span>
+        <span class="s1">incrementaldecoder=IncrementalDecoder,</span>
+        <span class="s1">streamwriter=StreamWriter,</span>
+        <span class="s1">streamreader=StreamReader,</span>
+    <span class="s1">)</span>
+
+
+<span class="s1">codecs.register(search_function)</span>
+</pre>
+</body>
+</html>

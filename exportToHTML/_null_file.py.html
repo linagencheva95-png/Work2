@@ -1,0 +1,89 @@
+<html>
+<head>
+<title>_null_file.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #0033b3;}
+.s1 { color: #080808;}
+.s2 { color: #1750eb;}
+.s3 { color: #067d17;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+_null_file.py</font>
+</center></td></tr></table>
+<pre><span class="s0">from </span><span class="s1">types </span><span class="s0">import </span><span class="s1">TracebackType</span>
+<span class="s0">from </span><span class="s1">typing </span><span class="s0">import </span><span class="s1">IO, Iterable, Iterator, List, Optional, Type</span>
+
+
+<span class="s0">class </span><span class="s1">NullFile(IO[str]):</span>
+    <span class="s0">def </span><span class="s1">close(self) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s0">pass</span>
+
+    <span class="s0">def </span><span class="s1">isatty(self) -&gt; bool:</span>
+        <span class="s0">return False</span>
+
+    <span class="s0">def </span><span class="s1">read(self, __n: int = </span><span class="s2">1</span><span class="s1">) -&gt; str:</span>
+        <span class="s0">return </span><span class="s3">&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">readable(self) -&gt; bool:</span>
+        <span class="s0">return False</span>
+
+    <span class="s0">def </span><span class="s1">readline(self, __limit: int = </span><span class="s2">1</span><span class="s1">) -&gt; str:</span>
+        <span class="s0">return </span><span class="s3">&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">readlines(self, __hint: int = </span><span class="s2">1</span><span class="s1">) -&gt; List[str]:</span>
+        <span class="s0">return </span><span class="s1">[]</span>
+
+    <span class="s0">def </span><span class="s1">seek(self, __offset: int, __whence: int = </span><span class="s2">1</span><span class="s1">) -&gt; int:</span>
+        <span class="s0">return </span><span class="s2">0</span>
+
+    <span class="s0">def </span><span class="s1">seekable(self) -&gt; bool:</span>
+        <span class="s0">return False</span>
+
+    <span class="s0">def </span><span class="s1">tell(self) -&gt; int:</span>
+        <span class="s0">return </span><span class="s2">0</span>
+
+    <span class="s0">def </span><span class="s1">truncate(self, __size: Optional[int] = </span><span class="s2">1</span><span class="s1">) -&gt; int:</span>
+        <span class="s0">return </span><span class="s2">0</span>
+
+    <span class="s0">def </span><span class="s1">writable(self) -&gt; bool:</span>
+        <span class="s0">return False</span>
+
+    <span class="s0">def </span><span class="s1">writelines(self, __lines: Iterable[str]) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s0">pass</span>
+
+    <span class="s0">def </span><span class="s1">__next__(self) -&gt; str:</span>
+        <span class="s0">return </span><span class="s3">&quot;&quot;</span>
+
+    <span class="s0">def </span><span class="s1">__iter__(self) -&gt; Iterator[str]:</span>
+        <span class="s0">return </span><span class="s1">iter([</span><span class="s3">&quot;&quot;</span><span class="s1">])</span>
+
+    <span class="s0">def </span><span class="s1">__enter__(self) -&gt; IO[str]:</span>
+        <span class="s0">return </span><span class="s1">self</span>
+
+    <span class="s0">def </span><span class="s1">__exit__(</span>
+        <span class="s1">self,</span>
+        <span class="s1">__t: Optional[Type[BaseException]],</span>
+        <span class="s1">__value: Optional[BaseException],</span>
+        <span class="s1">__traceback: Optional[TracebackType],</span>
+    <span class="s1">) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s0">pass</span>
+
+    <span class="s0">def </span><span class="s1">write(self, text: str) -&gt; int:</span>
+        <span class="s0">return </span><span class="s2">0</span>
+
+    <span class="s0">def </span><span class="s1">flush(self) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+        <span class="s0">pass</span>
+
+    <span class="s0">def </span><span class="s1">fileno(self) -&gt; int:</span>
+        <span class="s0">return </span><span class="s1">-</span><span class="s2">1</span>
+
+
+<span class="s1">NULL_FILE = NullFile()</span>
+</pre>
+</body>
+</html>

@@ -1,0 +1,145 @@
+<html>
+<head>
+<title>wait.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #0033b3;}
+.s1 { color: #080808;}
+.s2 { color: #067d17;}
+.s3 { color: #8c8c8c; font-style: italic;}
+.s4 { color: #1750eb;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+wait.py</font>
+</center></td></tr></table>
+<pre><span class="s0">from </span><span class="s1">__future__ </span><span class="s0">import </span><span class="s1">annotations</span>
+
+<span class="s0">import </span><span class="s1">select</span>
+<span class="s0">import </span><span class="s1">socket</span>
+<span class="s0">from </span><span class="s1">functools </span><span class="s0">import </span><span class="s1">partial</span>
+
+<span class="s1">__all__ = [</span><span class="s2">&quot;wait_for_read&quot;</span><span class="s1">, </span><span class="s2">&quot;wait_for_write&quot;</span><span class="s1">]</span>
+
+
+<span class="s3"># How should we wait on sockets?</span>
+<span class="s3">#</span>
+<span class="s3"># There are two types of APIs you can use for waiting on sockets: the fancy</span>
+<span class="s3"># modern stateful APIs like epoll/kqueue, and the older stateless APIs like</span>
+<span class="s3"># select/poll. The stateful APIs are more efficient when you have a lots of</span>
+<span class="s3"># sockets to keep track of, because you can set them up once and then use them</span>
+<span class="s3"># lots of times. But we only ever want to wait on a single socket at a time</span>
+<span class="s3"># and don't want to keep track of state, so the stateless APIs are actually</span>
+<span class="s3"># more efficient. So we want to use select() or poll().</span>
+<span class="s3">#</span>
+<span class="s3"># Now, how do we choose between select() and poll()? On traditional Unixes,</span>
+<span class="s3"># select() has a strange calling convention that makes it slow, or fail</span>
+<span class="s3"># altogether, for high-numbered file descriptors. The point of poll() is to fix</span>
+<span class="s3"># that, so on Unixes, we prefer poll().</span>
+<span class="s3">#</span>
+<span class="s3"># On Windows, there is no poll() (or at least Python doesn't provide a wrapper</span>
+<span class="s3"># for it), but that's OK, because on Windows, select() doesn't have this</span>
+<span class="s3"># strange calling convention; plain select() works fine.</span>
+<span class="s3">#</span>
+<span class="s3"># So: on Windows we use select(), and everywhere else we use poll(). We also</span>
+<span class="s3"># fall back to select() in case poll() is somehow broken or missing.</span>
+
+
+<span class="s0">def </span><span class="s1">select_wait_for_socket(</span>
+    <span class="s1">sock: socket.socket,</span>
+    <span class="s1">read: bool = </span><span class="s0">False</span><span class="s1">,</span>
+    <span class="s1">write: bool = </span><span class="s0">False</span><span class="s1">,</span>
+    <span class="s1">timeout: float | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+<span class="s1">) -&gt; bool:</span>
+    <span class="s0">if not </span><span class="s1">read </span><span class="s0">and not </span><span class="s1">write:</span>
+        <span class="s0">raise </span><span class="s1">RuntimeError(</span><span class="s2">&quot;must specify at least one of read=True, write=True&quot;</span><span class="s1">)</span>
+    <span class="s1">rcheck = []</span>
+    <span class="s1">wcheck = []</span>
+    <span class="s0">if </span><span class="s1">read:</span>
+        <span class="s1">rcheck.append(sock)</span>
+    <span class="s0">if </span><span class="s1">write:</span>
+        <span class="s1">wcheck.append(sock)</span>
+    <span class="s3"># When doing a non-blocking connect, most systems signal success by</span>
+    <span class="s3"># marking the socket writable. Windows, though, signals success by marked</span>
+    <span class="s3"># it as &quot;exceptional&quot;. We paper over the difference by checking the write</span>
+    <span class="s3"># sockets for both conditions. (The stdlib selectors module does the same</span>
+    <span class="s3"># thing.)</span>
+    <span class="s1">fn = partial(select.select, rcheck, wcheck, wcheck)</span>
+    <span class="s1">rready, wready, xready = fn(timeout)</span>
+    <span class="s0">return </span><span class="s1">bool(rready </span><span class="s0">or </span><span class="s1">wready </span><span class="s0">or </span><span class="s1">xready)</span>
+
+
+<span class="s0">def </span><span class="s1">poll_wait_for_socket(</span>
+    <span class="s1">sock: socket.socket,</span>
+    <span class="s1">read: bool = </span><span class="s0">False</span><span class="s1">,</span>
+    <span class="s1">write: bool = </span><span class="s0">False</span><span class="s1">,</span>
+    <span class="s1">timeout: float | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+<span class="s1">) -&gt; bool:</span>
+    <span class="s0">if not </span><span class="s1">read </span><span class="s0">and not </span><span class="s1">write:</span>
+        <span class="s0">raise </span><span class="s1">RuntimeError(</span><span class="s2">&quot;must specify at least one of read=True, write=True&quot;</span><span class="s1">)</span>
+    <span class="s1">mask = </span><span class="s4">0</span>
+    <span class="s0">if </span><span class="s1">read:</span>
+        <span class="s1">mask |= select.POLLIN</span>
+    <span class="s0">if </span><span class="s1">write:</span>
+        <span class="s1">mask |= select.POLLOUT</span>
+    <span class="s1">poll_obj = select.poll()</span>
+    <span class="s1">poll_obj.register(sock, mask)</span>
+
+    <span class="s3"># For some reason, poll() takes timeout in milliseconds</span>
+    <span class="s0">def </span><span class="s1">do_poll(t: float | </span><span class="s0">None</span><span class="s1">) -&gt; list[tuple[int, int]]:</span>
+        <span class="s0">if </span><span class="s1">t </span><span class="s0">is not None</span><span class="s1">:</span>
+            <span class="s1">t *= </span><span class="s4">1000</span>
+        <span class="s0">return </span><span class="s1">poll_obj.poll(t)</span>
+
+    <span class="s0">return </span><span class="s1">bool(do_poll(timeout))</span>
+
+
+<span class="s0">def </span><span class="s1">_have_working_poll() -&gt; bool:</span>
+    <span class="s3"># Apparently some systems have a select.poll that fails as soon as you try</span>
+    <span class="s3"># to use it, either due to strange configuration or broken monkeypatching</span>
+    <span class="s3"># from libraries like eventlet/greenlet.</span>
+    <span class="s0">try</span><span class="s1">:</span>
+        <span class="s1">poll_obj = select.poll()</span>
+        <span class="s1">poll_obj.poll(</span><span class="s4">0</span><span class="s1">)</span>
+    <span class="s0">except </span><span class="s1">(AttributeError, OSError):</span>
+        <span class="s0">return False</span>
+    <span class="s0">else</span><span class="s1">:</span>
+        <span class="s0">return True</span>
+
+
+<span class="s0">def </span><span class="s1">wait_for_socket(</span>
+    <span class="s1">sock: socket.socket,</span>
+    <span class="s1">read: bool = </span><span class="s0">False</span><span class="s1">,</span>
+    <span class="s1">write: bool = </span><span class="s0">False</span><span class="s1">,</span>
+    <span class="s1">timeout: float | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+<span class="s1">) -&gt; bool:</span>
+    <span class="s3"># We delay choosing which implementation to use until the first time we're</span>
+    <span class="s3"># called. We could do it at import time, but then we might make the wrong</span>
+    <span class="s3"># decision if someone goes wild with monkeypatching select.poll after</span>
+    <span class="s3"># we're imported.</span>
+    <span class="s0">global </span><span class="s1">wait_for_socket</span>
+    <span class="s0">if </span><span class="s1">_have_working_poll():</span>
+        <span class="s1">wait_for_socket = poll_wait_for_socket</span>
+    <span class="s0">elif </span><span class="s1">hasattr(select, </span><span class="s2">&quot;select&quot;</span><span class="s1">):</span>
+        <span class="s1">wait_for_socket = select_wait_for_socket</span>
+    <span class="s0">return </span><span class="s1">wait_for_socket(sock, read, write, timeout)</span>
+
+
+<span class="s0">def </span><span class="s1">wait_for_read(sock: socket.socket, timeout: float | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">) -&gt; bool:</span>
+    <span class="s3">&quot;&quot;&quot;Waits for reading to be available on a given socket. 
+    Returns True if the socket is readable, or False if the timeout expired. 
+    &quot;&quot;&quot;</span>
+    <span class="s0">return </span><span class="s1">wait_for_socket(sock, read=</span><span class="s0">True</span><span class="s1">, timeout=timeout)</span>
+
+
+<span class="s0">def </span><span class="s1">wait_for_write(sock: socket.socket, timeout: float | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">) -&gt; bool:</span>
+    <span class="s3">&quot;&quot;&quot;Waits for writing to be available on a given socket. 
+    Returns True if the socket is readable, or False if the timeout expired. 
+    &quot;&quot;&quot;</span>
+    <span class="s0">return </span><span class="s1">wait_for_socket(sock, write=</span><span class="s0">True</span><span class="s1">, timeout=timeout)</span>
+</pre>
+</body>
+</html>

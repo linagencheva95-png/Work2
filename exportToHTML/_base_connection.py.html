@@ -1,0 +1,188 @@
+<html>
+<head>
+<title>_base_connection.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #0033b3;}
+.s1 { color: #080808;}
+.s2 { color: #8c8c8c; font-style: italic;}
+.s3 { color: #1750eb;}
+.s4 { color: #067d17;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+_base_connection.py</font>
+</center></td></tr></table>
+<pre><span class="s0">from </span><span class="s1">__future__ </span><span class="s0">import </span><span class="s1">annotations</span>
+
+<span class="s0">import </span><span class="s1">typing</span>
+
+<span class="s0">from </span><span class="s1">.util.connection </span><span class="s0">import </span><span class="s1">_TYPE_SOCKET_OPTIONS</span>
+<span class="s0">from </span><span class="s1">.util.timeout </span><span class="s0">import </span><span class="s1">_DEFAULT_TIMEOUT, _TYPE_TIMEOUT</span>
+<span class="s0">from </span><span class="s1">.util.url </span><span class="s0">import </span><span class="s1">Url</span>
+
+<span class="s1">_TYPE_BODY = typing.Union[</span>
+    <span class="s1">bytes, typing.IO[typing.Any], typing.Iterable[bytes | str], str</span>
+<span class="s1">]</span>
+
+
+<span class="s0">class </span><span class="s1">ProxyConfig(typing.NamedTuple):</span>
+    <span class="s1">ssl_context: ssl.SSLContext | </span><span class="s0">None</span>
+    <span class="s1">use_forwarding_for_https: bool</span>
+    <span class="s1">assert_hostname: </span><span class="s0">None </span><span class="s1">| str | typing.Literal[</span><span class="s0">False</span><span class="s1">]</span>
+    <span class="s1">assert_fingerprint: str | </span><span class="s0">None</span>
+
+
+<span class="s0">class </span><span class="s1">_ResponseOptions(typing.NamedTuple):</span>
+    <span class="s2"># TODO: Remove this in favor of a better</span>
+    <span class="s2"># HTTP request/response lifecycle tracking.</span>
+    <span class="s1">request_method: str</span>
+    <span class="s1">request_url: str</span>
+    <span class="s1">preload_content: bool</span>
+    <span class="s1">decode_content: bool</span>
+    <span class="s1">enforce_content_length: bool</span>
+
+
+<span class="s0">if </span><span class="s1">typing.TYPE_CHECKING:</span>
+    <span class="s0">import </span><span class="s1">ssl</span>
+    <span class="s0">from </span><span class="s1">typing </span><span class="s0">import </span><span class="s1">Protocol</span>
+
+    <span class="s0">from </span><span class="s1">.response </span><span class="s0">import </span><span class="s1">BaseHTTPResponse</span>
+
+    <span class="s0">class </span><span class="s1">BaseHTTPConnection(Protocol):</span>
+        <span class="s1">default_port: typing.ClassVar[int]</span>
+        <span class="s1">default_socket_options: typing.ClassVar[_TYPE_SOCKET_OPTIONS]</span>
+
+        <span class="s1">host: str</span>
+        <span class="s1">port: int</span>
+        <span class="s1">timeout: </span><span class="s0">None </span><span class="s1">| (</span>
+            <span class="s1">float</span>
+        <span class="s1">)  </span><span class="s2"># Instance doesn't store _DEFAULT_TIMEOUT, must be resolved.</span>
+        <span class="s1">blocksize: int</span>
+        <span class="s1">source_address: tuple[str, int] | </span><span class="s0">None</span>
+        <span class="s1">socket_options: _TYPE_SOCKET_OPTIONS | </span><span class="s0">None</span>
+
+        <span class="s1">proxy: Url | </span><span class="s0">None</span>
+        <span class="s1">proxy_config: ProxyConfig | </span><span class="s0">None</span>
+
+        <span class="s1">is_verified: bool</span>
+        <span class="s1">proxy_is_verified: bool | </span><span class="s0">None</span>
+
+        <span class="s0">def </span><span class="s1">__init__(</span>
+            <span class="s1">self,</span>
+            <span class="s1">host: str,</span>
+            <span class="s1">port: int | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">*,</span>
+            <span class="s1">timeout: _TYPE_TIMEOUT = _DEFAULT_TIMEOUT,</span>
+            <span class="s1">source_address: tuple[str, int] | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">blocksize: int = </span><span class="s3">8192</span><span class="s1">,</span>
+            <span class="s1">socket_options: _TYPE_SOCKET_OPTIONS | </span><span class="s0">None </span><span class="s1">= ...,</span>
+            <span class="s1">proxy: Url | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">proxy_config: ProxyConfig | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+        <span class="s1">) -&gt; </span><span class="s0">None</span><span class="s1">: ...</span>
+
+        <span class="s0">def </span><span class="s1">set_tunnel(</span>
+            <span class="s1">self,</span>
+            <span class="s1">host: str,</span>
+            <span class="s1">port: int | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">headers: typing.Mapping[str, str] | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">scheme: str = </span><span class="s4">&quot;http&quot;</span><span class="s1">,</span>
+        <span class="s1">) -&gt; </span><span class="s0">None</span><span class="s1">: ...</span>
+
+        <span class="s0">def </span><span class="s1">connect(self) -&gt; </span><span class="s0">None</span><span class="s1">: ...</span>
+
+        <span class="s0">def </span><span class="s1">request(</span>
+            <span class="s1">self,</span>
+            <span class="s1">method: str,</span>
+            <span class="s1">url: str,</span>
+            <span class="s1">body: _TYPE_BODY | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">headers: typing.Mapping[str, str] | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s2"># We know *at least* botocore is depending on the order of the</span>
+            <span class="s2"># first 3 parameters so to be safe we only mark the later ones</span>
+            <span class="s2"># as keyword-only to ensure we have space to extend.</span>
+            <span class="s1">*,</span>
+            <span class="s1">chunked: bool = </span><span class="s0">False</span><span class="s1">,</span>
+            <span class="s1">preload_content: bool = </span><span class="s0">True</span><span class="s1">,</span>
+            <span class="s1">decode_content: bool = </span><span class="s0">True</span><span class="s1">,</span>
+            <span class="s1">enforce_content_length: bool = </span><span class="s0">True</span><span class="s1">,</span>
+        <span class="s1">) -&gt; </span><span class="s0">None</span><span class="s1">: ...</span>
+
+        <span class="s0">def </span><span class="s1">getresponse(self) -&gt; BaseHTTPResponse: ...</span>
+
+        <span class="s0">def </span><span class="s1">close(self) -&gt; </span><span class="s0">None</span><span class="s1">: ...</span>
+
+        <span class="s1">@property</span>
+        <span class="s0">def </span><span class="s1">is_closed(self) -&gt; bool:</span>
+            <span class="s2">&quot;&quot;&quot;Whether the connection either is brand new or has been previously closed. 
+            If this property is True then both ``is_connected`` and ``has_connected_to_proxy`` 
+            properties must be False. 
+            &quot;&quot;&quot;</span>
+
+        <span class="s1">@property</span>
+        <span class="s0">def </span><span class="s1">is_connected(self) -&gt; bool:</span>
+            <span class="s2">&quot;&quot;&quot;Whether the connection is actively connected to any origin (proxy or target)&quot;&quot;&quot;</span>
+
+        <span class="s1">@property</span>
+        <span class="s0">def </span><span class="s1">has_connected_to_proxy(self) -&gt; bool:</span>
+            <span class="s2">&quot;&quot;&quot;Whether the connection has successfully connected to its proxy. 
+            This returns False if no proxy is in use. Used to determine whether 
+            errors are coming from the proxy layer or from tunnelling to the target origin. 
+            &quot;&quot;&quot;</span>
+
+    <span class="s0">class </span><span class="s1">BaseHTTPSConnection(BaseHTTPConnection, Protocol):</span>
+        <span class="s1">default_port: typing.ClassVar[int]</span>
+        <span class="s1">default_socket_options: typing.ClassVar[_TYPE_SOCKET_OPTIONS]</span>
+
+        <span class="s2"># Certificate verification methods</span>
+        <span class="s1">cert_reqs: int | str | </span><span class="s0">None</span>
+        <span class="s1">assert_hostname: </span><span class="s0">None </span><span class="s1">| str | typing.Literal[</span><span class="s0">False</span><span class="s1">]</span>
+        <span class="s1">assert_fingerprint: str | </span><span class="s0">None</span>
+        <span class="s1">ssl_context: ssl.SSLContext | </span><span class="s0">None</span>
+
+        <span class="s2"># Trusted CAs</span>
+        <span class="s1">ca_certs: str | </span><span class="s0">None</span>
+        <span class="s1">ca_cert_dir: str | </span><span class="s0">None</span>
+        <span class="s1">ca_cert_data: </span><span class="s0">None </span><span class="s1">| str | bytes</span>
+
+        <span class="s2"># TLS version</span>
+        <span class="s1">ssl_minimum_version: int | </span><span class="s0">None</span>
+        <span class="s1">ssl_maximum_version: int | </span><span class="s0">None</span>
+        <span class="s1">ssl_version: int | str | </span><span class="s0">None  </span><span class="s2"># Deprecated</span>
+
+        <span class="s2"># Client certificates</span>
+        <span class="s1">cert_file: str | </span><span class="s0">None</span>
+        <span class="s1">key_file: str | </span><span class="s0">None</span>
+        <span class="s1">key_password: str | </span><span class="s0">None</span>
+
+        <span class="s0">def </span><span class="s1">__init__(</span>
+            <span class="s1">self,</span>
+            <span class="s1">host: str,</span>
+            <span class="s1">port: int | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">*,</span>
+            <span class="s1">timeout: _TYPE_TIMEOUT = _DEFAULT_TIMEOUT,</span>
+            <span class="s1">source_address: tuple[str, int] | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">blocksize: int = </span><span class="s3">16384</span><span class="s1">,</span>
+            <span class="s1">socket_options: _TYPE_SOCKET_OPTIONS | </span><span class="s0">None </span><span class="s1">= ...,</span>
+            <span class="s1">proxy: Url | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">proxy_config: ProxyConfig | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">cert_reqs: int | str | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">assert_hostname: </span><span class="s0">None </span><span class="s1">| str | typing.Literal[</span><span class="s0">False</span><span class="s1">] = </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">assert_fingerprint: str | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">server_hostname: str | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">ssl_context: ssl.SSLContext | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">ca_certs: str | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">ca_cert_dir: str | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">ca_cert_data: </span><span class="s0">None </span><span class="s1">| str | bytes = </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">ssl_minimum_version: int | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">ssl_maximum_version: int | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">ssl_version: int | str | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,  </span><span class="s2"># Deprecated</span>
+            <span class="s1">cert_file: str | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">key_file: str | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+            <span class="s1">key_password: str | </span><span class="s0">None </span><span class="s1">= </span><span class="s0">None</span><span class="s1">,</span>
+        <span class="s1">) -&gt; </span><span class="s0">None</span><span class="s1">: ...</span>
+</pre>
+</body>
+</html>

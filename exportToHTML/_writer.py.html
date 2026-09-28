@@ -1,0 +1,251 @@
+<html>
+<head>
+<title>_writer.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #0033b3;}
+.s1 { color: #080808;}
+.s2 { color: #1750eb;}
+.s3 { color: #067d17;}
+.s4 { color: #0037a6;}
+.s5 { color: #8c8c8c; font-style: italic;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+_writer.py</font>
+</center></td></tr></table>
+<pre><span class="s0">from </span><span class="s1">__future__ </span><span class="s0">import </span><span class="s1">annotations</span>
+
+<span class="s0">from </span><span class="s1">collections.abc </span><span class="s0">import </span><span class="s1">Mapping</span>
+<span class="s0">from </span><span class="s1">datetime </span><span class="s0">import </span><span class="s1">date, datetime, time</span>
+<span class="s0">from </span><span class="s1">types </span><span class="s0">import </span><span class="s1">MappingProxyType</span>
+
+<span class="s1">TYPE_CHECKING = </span><span class="s0">False</span>
+<span class="s0">if </span><span class="s1">TYPE_CHECKING:</span>
+    <span class="s0">from </span><span class="s1">collections.abc </span><span class="s0">import </span><span class="s1">Generator</span>
+    <span class="s0">from </span><span class="s1">decimal </span><span class="s0">import </span><span class="s1">Decimal</span>
+    <span class="s0">from </span><span class="s1">typing </span><span class="s0">import </span><span class="s1">IO, Any, Final</span>
+
+<span class="s1">ASCII_CTRL = frozenset(chr(i) </span><span class="s0">for </span><span class="s1">i </span><span class="s0">in </span><span class="s1">range(</span><span class="s2">32</span><span class="s1">)) | frozenset(chr(</span><span class="s2">127</span><span class="s1">))</span>
+<span class="s1">ILLEGAL_BASIC_STR_CHARS = frozenset(</span><span class="s3">'&quot;</span><span class="s4">\\</span><span class="s3">'</span><span class="s1">) | ASCII_CTRL - frozenset(</span><span class="s3">&quot;</span><span class="s4">\t</span><span class="s3">&quot;</span><span class="s1">)</span>
+<span class="s1">BARE_KEY_CHARS = frozenset(</span>
+    <span class="s3">&quot;abcdefghijklmnopqrstuvwxyz&quot; &quot;ABCDEFGHIJKLMNOPQRSTUVWXYZ&quot; &quot;0123456789&quot; &quot;-_&quot;</span>
+<span class="s1">)</span>
+<span class="s1">ARRAY_TYPES = (list, tuple)</span>
+<span class="s1">MAX_LINE_LENGTH = </span><span class="s2">100</span>
+
+<span class="s1">COMPACT_ESCAPES = MappingProxyType(</span>
+    <span class="s1">{</span>
+        <span class="s3">&quot;</span><span class="s4">\u0008</span><span class="s3">&quot;</span><span class="s1">: </span><span class="s3">&quot;</span><span class="s4">\\</span><span class="s3">b&quot;</span><span class="s1">,  </span><span class="s5"># backspace</span>
+        <span class="s3">&quot;</span><span class="s4">\u000A</span><span class="s3">&quot;</span><span class="s1">: </span><span class="s3">&quot;</span><span class="s4">\\</span><span class="s3">n&quot;</span><span class="s1">,  </span><span class="s5"># linefeed</span>
+        <span class="s3">&quot;</span><span class="s4">\u000C</span><span class="s3">&quot;</span><span class="s1">: </span><span class="s3">&quot;</span><span class="s4">\\</span><span class="s3">f&quot;</span><span class="s1">,  </span><span class="s5"># form feed</span>
+        <span class="s3">&quot;</span><span class="s4">\u000D</span><span class="s3">&quot;</span><span class="s1">: </span><span class="s3">&quot;</span><span class="s4">\\</span><span class="s3">r&quot;</span><span class="s1">,  </span><span class="s5"># carriage return</span>
+        <span class="s3">&quot;</span><span class="s4">\u0022</span><span class="s3">&quot;</span><span class="s1">: </span><span class="s3">'</span><span class="s4">\\</span><span class="s3">&quot;'</span><span class="s1">,  </span><span class="s5"># quote</span>
+        <span class="s3">&quot;</span><span class="s4">\u005C</span><span class="s3">&quot;</span><span class="s1">: </span><span class="s3">&quot;</span><span class="s4">\\\\</span><span class="s3">&quot;</span><span class="s1">,  </span><span class="s5"># backslash</span>
+    <span class="s1">}</span>
+<span class="s1">)</span>
+
+
+<span class="s0">class </span><span class="s1">Context:</span>
+    <span class="s0">def </span><span class="s1">__init__(self, allow_multiline: bool, indent: int):</span>
+        <span class="s0">if </span><span class="s1">indent &lt; </span><span class="s2">0</span><span class="s1">:</span>
+            <span class="s0">raise </span><span class="s1">ValueError(</span><span class="s3">&quot;Indent width must be non-negative&quot;</span><span class="s1">)</span>
+        <span class="s1">self.allow_multiline: Final = allow_multiline</span>
+        <span class="s5"># cache rendered inline tables (mapping from object id to rendered inline table)</span>
+        <span class="s1">self.inline_table_cache: Final[dict[int, str]] = {}</span>
+        <span class="s1">self.indent_str: Final = </span><span class="s3">&quot; &quot; </span><span class="s1">* indent</span>
+
+
+<span class="s0">def </span><span class="s1">dump(</span>
+    <span class="s1">obj: Mapping[str, Any],</span>
+    <span class="s1">fp: IO[bytes],</span>
+    <span class="s1">/,</span>
+    <span class="s1">*,</span>
+    <span class="s1">multiline_strings: bool = </span><span class="s0">False</span><span class="s1">,</span>
+    <span class="s1">indent: int = </span><span class="s2">4</span><span class="s1">,</span>
+<span class="s1">) -&gt; </span><span class="s0">None</span><span class="s1">:</span>
+    <span class="s1">ctx = Context(multiline_strings, indent)</span>
+    <span class="s0">for </span><span class="s1">chunk </span><span class="s0">in </span><span class="s1">gen_table_chunks(obj, ctx, name=</span><span class="s3">&quot;&quot;</span><span class="s1">):</span>
+        <span class="s1">fp.write(chunk.encode())</span>
+
+
+<span class="s0">def </span><span class="s1">dumps(</span>
+    <span class="s1">obj: Mapping[str, Any], /, *, multiline_strings: bool = </span><span class="s0">False</span><span class="s1">, indent: int = </span><span class="s2">4</span>
+<span class="s1">) -&gt; str:</span>
+    <span class="s1">ctx = Context(multiline_strings, indent)</span>
+    <span class="s0">return </span><span class="s3">&quot;&quot;</span><span class="s1">.join(gen_table_chunks(obj, ctx, name=</span><span class="s3">&quot;&quot;</span><span class="s1">))</span>
+
+
+<span class="s0">def </span><span class="s1">gen_table_chunks(</span>
+    <span class="s1">table: Mapping[str, Any],</span>
+    <span class="s1">ctx: Context,</span>
+    <span class="s1">*,</span>
+    <span class="s1">name: str,</span>
+    <span class="s1">inside_aot: bool = </span><span class="s0">False</span><span class="s1">,</span>
+<span class="s1">) -&gt; Generator[str, </span><span class="s0">None</span><span class="s1">, </span><span class="s0">None</span><span class="s1">]:</span>
+    <span class="s1">yielded = </span><span class="s0">False</span>
+    <span class="s1">literals = []</span>
+    <span class="s1">tables: list[tuple[str, Any, bool]] = []  </span><span class="s5"># =&gt; [(key, value, inside_aot)]</span>
+    <span class="s0">for </span><span class="s1">k, v </span><span class="s0">in </span><span class="s1">table.items():</span>
+        <span class="s0">if </span><span class="s1">isinstance(v, Mapping):</span>
+            <span class="s1">tables.append((k, v, </span><span class="s0">False</span><span class="s1">))</span>
+        <span class="s0">elif </span><span class="s1">is_aot(v) </span><span class="s0">and not </span><span class="s1">all(is_suitable_inline_table(t, ctx) </span><span class="s0">for </span><span class="s1">t </span><span class="s0">in </span><span class="s1">v):</span>
+            <span class="s1">tables.extend((k, t, </span><span class="s0">True</span><span class="s1">) </span><span class="s0">for </span><span class="s1">t </span><span class="s0">in </span><span class="s1">v)</span>
+        <span class="s0">else</span><span class="s1">:</span>
+            <span class="s1">literals.append((k, v))</span>
+
+    <span class="s0">if </span><span class="s1">inside_aot </span><span class="s0">or </span><span class="s1">name </span><span class="s0">and </span><span class="s1">(literals </span><span class="s0">or not </span><span class="s1">tables):</span>
+        <span class="s1">yielded = </span><span class="s0">True</span>
+        <span class="s0">yield </span><span class="s3">f&quot;[[</span><span class="s4">{</span><span class="s1">name</span><span class="s4">}</span><span class="s3">]]</span><span class="s4">\n</span><span class="s3">&quot; </span><span class="s0">if </span><span class="s1">inside_aot </span><span class="s0">else </span><span class="s3">f&quot;[</span><span class="s4">{</span><span class="s1">name</span><span class="s4">}</span><span class="s3">]</span><span class="s4">\n</span><span class="s3">&quot;</span>
+
+    <span class="s0">if </span><span class="s1">literals:</span>
+        <span class="s1">yielded = </span><span class="s0">True</span>
+        <span class="s0">for </span><span class="s1">k, v </span><span class="s0">in </span><span class="s1">literals:</span>
+            <span class="s0">yield </span><span class="s3">f&quot;</span><span class="s4">{</span><span class="s1">format_key_part(k)</span><span class="s4">} </span><span class="s3">= </span><span class="s4">{</span><span class="s1">format_literal(v, ctx)</span><span class="s4">}\n</span><span class="s3">&quot;</span>
+
+    <span class="s0">for </span><span class="s1">k, v, in_aot </span><span class="s0">in </span><span class="s1">tables:</span>
+        <span class="s0">if </span><span class="s1">yielded:</span>
+            <span class="s0">yield </span><span class="s3">&quot;</span><span class="s4">\n</span><span class="s3">&quot;</span>
+        <span class="s0">else</span><span class="s1">:</span>
+            <span class="s1">yielded = </span><span class="s0">True</span>
+        <span class="s1">key_part = format_key_part(k)</span>
+        <span class="s1">display_name = </span><span class="s3">f&quot;</span><span class="s4">{</span><span class="s1">name</span><span class="s4">}</span><span class="s3">.</span><span class="s4">{</span><span class="s1">key_part</span><span class="s4">}</span><span class="s3">&quot; </span><span class="s0">if </span><span class="s1">name </span><span class="s0">else </span><span class="s1">key_part</span>
+        <span class="s0">yield from </span><span class="s1">gen_table_chunks(v, ctx, name=display_name, inside_aot=in_aot)</span>
+
+
+<span class="s0">def </span><span class="s1">format_literal(obj: object, ctx: Context, *, nest_level: int = </span><span class="s2">0</span><span class="s1">) -&gt; str:</span>
+    <span class="s0">if </span><span class="s1">isinstance(obj, bool):</span>
+        <span class="s0">return </span><span class="s3">&quot;true&quot; </span><span class="s0">if </span><span class="s1">obj </span><span class="s0">else </span><span class="s3">&quot;false&quot;</span>
+    <span class="s0">if </span><span class="s1">isinstance(obj, (int, float, date, datetime)):</span>
+        <span class="s0">return </span><span class="s1">str(obj)</span>
+    <span class="s0">if </span><span class="s1">isinstance(obj, time):</span>
+        <span class="s0">if </span><span class="s1">obj.tzinfo:</span>
+            <span class="s0">raise </span><span class="s1">ValueError(</span><span class="s3">&quot;TOML does not support offset times&quot;</span><span class="s1">)</span>
+        <span class="s0">return </span><span class="s1">str(obj)</span>
+    <span class="s0">if </span><span class="s1">isinstance(obj, str):</span>
+        <span class="s0">return </span><span class="s1">format_string(obj, allow_multiline=ctx.allow_multiline)</span>
+    <span class="s0">if </span><span class="s1">isinstance(obj, ARRAY_TYPES):</span>
+        <span class="s0">return </span><span class="s1">format_inline_array(obj, ctx, nest_level)</span>
+    <span class="s0">if </span><span class="s1">isinstance(obj, Mapping):</span>
+        <span class="s0">return </span><span class="s1">format_inline_table(obj, ctx)</span>
+
+    <span class="s5"># Lazy import to improve module import time</span>
+    <span class="s0">from </span><span class="s1">decimal </span><span class="s0">import </span><span class="s1">Decimal</span>
+
+    <span class="s0">if </span><span class="s1">isinstance(obj, Decimal):</span>
+        <span class="s0">return </span><span class="s1">format_decimal(obj)</span>
+    <span class="s0">raise </span><span class="s1">TypeError(</span>
+        <span class="s3">f&quot;Object of type '</span><span class="s4">{</span><span class="s1">type(obj).__qualname__</span><span class="s4">}</span><span class="s3">' is not TOML serializable&quot;</span>
+    <span class="s1">)</span>
+
+
+<span class="s0">def </span><span class="s1">format_decimal(obj: Decimal) -&gt; str:</span>
+    <span class="s0">if </span><span class="s1">obj.is_nan():</span>
+        <span class="s0">return </span><span class="s3">&quot;nan&quot;</span>
+    <span class="s0">if </span><span class="s1">obj.is_infinite():</span>
+        <span class="s0">return </span><span class="s3">&quot;-inf&quot; </span><span class="s0">if </span><span class="s1">obj.is_signed() </span><span class="s0">else </span><span class="s3">&quot;inf&quot;</span>
+    <span class="s1">dec_str = str(obj).lower()</span>
+    <span class="s0">return </span><span class="s1">dec_str </span><span class="s0">if </span><span class="s3">&quot;.&quot; </span><span class="s0">in </span><span class="s1">dec_str </span><span class="s0">or </span><span class="s3">&quot;e&quot; </span><span class="s0">in </span><span class="s1">dec_str </span><span class="s0">else </span><span class="s1">dec_str + </span><span class="s3">&quot;.0&quot;</span>
+
+
+<span class="s0">def </span><span class="s1">format_inline_table(obj: Mapping, ctx: Context) -&gt; str:</span>
+    <span class="s5"># check cache first</span>
+    <span class="s1">obj_id = id(obj)</span>
+    <span class="s0">if </span><span class="s1">obj_id </span><span class="s0">in </span><span class="s1">ctx.inline_table_cache:</span>
+        <span class="s0">return </span><span class="s1">ctx.inline_table_cache[obj_id]</span>
+
+    <span class="s0">if not </span><span class="s1">obj:</span>
+        <span class="s1">rendered = </span><span class="s3">&quot;{}&quot;</span>
+    <span class="s0">else</span><span class="s1">:</span>
+        <span class="s1">rendered = (</span>
+            <span class="s3">&quot;{ &quot;</span>
+            <span class="s1">+ </span><span class="s3">&quot;, &quot;</span><span class="s1">.join(</span>
+                <span class="s3">f&quot;</span><span class="s4">{</span><span class="s1">format_key_part(k)</span><span class="s4">} </span><span class="s3">= </span><span class="s4">{</span><span class="s1">format_literal(v, ctx)</span><span class="s4">}</span><span class="s3">&quot;</span>
+                <span class="s0">for </span><span class="s1">k, v </span><span class="s0">in </span><span class="s1">obj.items()</span>
+            <span class="s1">)</span>
+            <span class="s1">+ </span><span class="s3">&quot; }&quot;</span>
+        <span class="s1">)</span>
+    <span class="s1">ctx.inline_table_cache[obj_id] = rendered</span>
+    <span class="s0">return </span><span class="s1">rendered</span>
+
+
+<span class="s0">def </span><span class="s1">format_inline_array(obj: tuple | list, ctx: Context, nest_level: int) -&gt; str:</span>
+    <span class="s0">if not </span><span class="s1">obj:</span>
+        <span class="s0">return </span><span class="s3">&quot;[]&quot;</span>
+    <span class="s1">item_indent = ctx.indent_str * (</span><span class="s2">1 </span><span class="s1">+ nest_level)</span>
+    <span class="s1">closing_bracket_indent = ctx.indent_str * nest_level</span>
+    <span class="s0">return </span><span class="s1">(</span>
+        <span class="s3">&quot;[</span><span class="s4">\n</span><span class="s3">&quot;</span>
+        <span class="s1">+ </span><span class="s3">&quot;,</span><span class="s4">\n</span><span class="s3">&quot;</span><span class="s1">.join(</span>
+            <span class="s1">item_indent + format_literal(item, ctx, nest_level=nest_level + </span><span class="s2">1</span><span class="s1">)</span>
+            <span class="s0">for </span><span class="s1">item </span><span class="s0">in </span><span class="s1">obj</span>
+        <span class="s1">)</span>
+        <span class="s1">+ </span><span class="s3">f&quot;,</span><span class="s4">\n{</span><span class="s1">closing_bracket_indent</span><span class="s4">}</span><span class="s3">]&quot;</span>
+    <span class="s1">)</span>
+
+
+<span class="s0">def </span><span class="s1">format_key_part(part: str) -&gt; str:</span>
+    <span class="s0">try</span><span class="s1">:</span>
+        <span class="s1">only_bare_key_chars = BARE_KEY_CHARS.issuperset(part)</span>
+    <span class="s0">except </span><span class="s1">TypeError:</span>
+        <span class="s0">raise </span><span class="s1">TypeError(</span>
+            <span class="s3">f&quot;Invalid mapping key '</span><span class="s4">{</span><span class="s1">part</span><span class="s4">}</span><span class="s3">' of type '</span><span class="s4">{</span><span class="s1">type(part).__qualname__</span><span class="s4">}</span><span class="s3">'.&quot;</span>
+            <span class="s3">&quot; A string is required.&quot;</span>
+        <span class="s1">) </span><span class="s0">from None</span>
+
+    <span class="s0">if </span><span class="s1">part </span><span class="s0">and </span><span class="s1">only_bare_key_chars:</span>
+        <span class="s0">return </span><span class="s1">part</span>
+    <span class="s0">return </span><span class="s1">format_string(part, allow_multiline=</span><span class="s0">False</span><span class="s1">)</span>
+
+
+<span class="s0">def </span><span class="s1">format_string(s: str, *, allow_multiline: bool) -&gt; str:</span>
+    <span class="s1">do_multiline = allow_multiline </span><span class="s0">and </span><span class="s3">&quot;</span><span class="s4">\n</span><span class="s3">&quot; </span><span class="s0">in </span><span class="s1">s</span>
+    <span class="s0">if </span><span class="s1">do_multiline:</span>
+        <span class="s1">result = </span><span class="s3">'&quot;&quot;&quot;</span><span class="s4">\n</span><span class="s3">'</span>
+        <span class="s1">s = s.replace(</span><span class="s3">&quot;</span><span class="s4">\r\n</span><span class="s3">&quot;</span><span class="s1">, </span><span class="s3">&quot;</span><span class="s4">\n</span><span class="s3">&quot;</span><span class="s1">)</span>
+    <span class="s0">else</span><span class="s1">:</span>
+        <span class="s1">result = </span><span class="s3">'&quot;'</span>
+
+    <span class="s1">pos = seq_start = </span><span class="s2">0</span>
+    <span class="s0">while True</span><span class="s1">:</span>
+        <span class="s0">try</span><span class="s1">:</span>
+            <span class="s1">char = s[pos]</span>
+        <span class="s0">except </span><span class="s1">IndexError:</span>
+            <span class="s1">result += s[seq_start:pos]</span>
+            <span class="s0">if </span><span class="s1">do_multiline:</span>
+                <span class="s0">return </span><span class="s1">result + </span><span class="s3">'&quot;&quot;&quot;'</span>
+            <span class="s0">return </span><span class="s1">result + </span><span class="s3">'&quot;'</span>
+        <span class="s0">if </span><span class="s1">char </span><span class="s0">in </span><span class="s1">ILLEGAL_BASIC_STR_CHARS:</span>
+            <span class="s1">result += s[seq_start:pos]</span>
+            <span class="s0">if </span><span class="s1">char </span><span class="s0">in </span><span class="s1">COMPACT_ESCAPES:</span>
+                <span class="s0">if </span><span class="s1">do_multiline </span><span class="s0">and </span><span class="s1">char == </span><span class="s3">&quot;</span><span class="s4">\n</span><span class="s3">&quot;</span><span class="s1">:</span>
+                    <span class="s1">result += </span><span class="s3">&quot;</span><span class="s4">\n</span><span class="s3">&quot;</span>
+                <span class="s0">else</span><span class="s1">:</span>
+                    <span class="s1">result += COMPACT_ESCAPES[char]</span>
+            <span class="s0">else</span><span class="s1">:</span>
+                <span class="s1">result += </span><span class="s3">&quot;</span><span class="s4">\\</span><span class="s3">u&quot; </span><span class="s1">+ hex(ord(char))[</span><span class="s2">2</span><span class="s1">:].rjust(</span><span class="s2">4</span><span class="s1">, </span><span class="s3">&quot;0&quot;</span><span class="s1">)</span>
+            <span class="s1">seq_start = pos + </span><span class="s2">1</span>
+        <span class="s1">pos += </span><span class="s2">1</span>
+
+
+<span class="s0">def </span><span class="s1">is_aot(obj: Any) -&gt; bool:</span>
+    <span class="s5">&quot;&quot;&quot;Decides if an object behaves as an array of tables (i.e. a nonempty list 
+    of dicts).&quot;&quot;&quot;</span>
+    <span class="s0">return </span><span class="s1">bool(</span>
+        <span class="s1">isinstance(obj, ARRAY_TYPES)</span>
+        <span class="s0">and </span><span class="s1">obj</span>
+        <span class="s0">and </span><span class="s1">all(isinstance(v, Mapping) </span><span class="s0">for </span><span class="s1">v </span><span class="s0">in </span><span class="s1">obj)</span>
+    <span class="s1">)</span>
+
+
+<span class="s0">def </span><span class="s1">is_suitable_inline_table(obj: Mapping, ctx: Context) -&gt; bool:</span>
+    <span class="s5">&quot;&quot;&quot;Use heuristics to decide if the inline-style representation is a good 
+    choice for a given table.&quot;&quot;&quot;</span>
+    <span class="s1">rendered_inline = </span><span class="s3">f&quot;</span><span class="s4">{</span><span class="s1">ctx.indent_str</span><span class="s4">}{</span><span class="s1">format_inline_table(obj, ctx)</span><span class="s4">}</span><span class="s3">,&quot;</span>
+    <span class="s0">return </span><span class="s1">len(rendered_inline) &lt;= MAX_LINE_LENGTH </span><span class="s0">and </span><span class="s3">&quot;</span><span class="s4">\n</span><span class="s3">&quot; </span><span class="s0">not in </span><span class="s1">rendered_inline</span>
+</pre>
+</body>
+</html>

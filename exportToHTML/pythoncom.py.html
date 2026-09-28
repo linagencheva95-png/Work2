@@ -1,0 +1,51 @@
+<html>
+<head>
+<title>pythoncom.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #8c8c8c; font-style: italic;}
+.s1 { color: #080808;}
+.s2 { color: #0033b3;}
+.s3 { color: #067d17;}
+.s4 { color: #1750eb;}
+.s5 { color: #0037a6;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+pythoncom.py</font>
+</center></td></tr></table>
+<pre><span class="s0"># Magic utility that &quot;redirects&quot; to pythoncomXX.dll</span>
+<span class="s2">from </span><span class="s1">typing </span><span class="s2">import </span><span class="s1">Any</span>
+
+<span class="s2">import </span><span class="s1">pywintypes</span>
+
+<span class="s1">pywintypes.__import_pywin32_system_module__(</span><span class="s3">&quot;pythoncom&quot;</span><span class="s1">, globals())</span>
+
+
+<span class="s0"># This module dynamically re-exports from a C-Extension.</span>
+<span class="s0"># `__getattr__() -&gt; Any` prevents checkers attribute access errors</span>
+<span class="s0"># without the use of external type stubs.</span>
+<span class="s0"># So keep an empty stub behind `if TYPE_CHECKING` if pythoncom.frozen support is removed.</span>
+<span class="s2">def </span><span class="s1">__getattr__(name: str) -&gt; Any:</span>
+    <span class="s2">if </span><span class="s1">name == </span><span class="s3">&quot;frozen&quot;</span><span class="s1">:</span>
+        <span class="s2">import </span><span class="s1">sys</span>
+        <span class="s2">import </span><span class="s1">warnings</span>
+
+        <span class="s1">warnings.warn(</span>
+            <span class="s3">f&quot;`pythoncom.frozen` used to expose `Py_FrozenFlag` from the C API. &quot;</span>
+            <span class="s1">+ </span><span class="s3">&quot;`Py_FrozenFlag` is deprecated since Python 3.12. &quot;</span>
+            <span class="s1">+ </span><span class="s3">&quot;Ever since pywin32 b200, loading the `win32com` module has silently &quot;</span>
+            <span class="s1">+ </span><span class="s3">&quot;been replacing `pythoncom.frozen` with `sys.frozen`. &quot;</span>
+            <span class="s1">+ </span><span class="s3">'Use `getattr(sys, &quot;frozen&quot;, False)` directly instead.'</span><span class="s1">,</span>
+            <span class="s1">DeprecationWarning,</span>
+            <span class="s1">stacklevel=</span><span class="s4">2</span><span class="s1">,</span>
+        <span class="s1">)</span>
+        <span class="s2">return </span><span class="s1">getattr(sys, </span><span class="s3">&quot;frozen&quot;</span><span class="s1">, </span><span class="s2">False</span><span class="s1">)</span>
+    <span class="s2">else</span><span class="s1">:</span>
+        <span class="s2">raise </span><span class="s1">AttributeError(</span><span class="s3">f&quot;module </span><span class="s5">{</span><span class="s1">__name__</span><span class="s5">!r} </span><span class="s3">has no attribute </span><span class="s5">{</span><span class="s1">name</span><span class="s5">!r}</span><span class="s3">&quot;</span><span class="s1">)</span>
+</pre>
+</body>
+</html>

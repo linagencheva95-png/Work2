@@ -1,0 +1,749 @@
+<html>
+<head>
+<title>fetch.py</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<style type="text/css">
+.s0 { color: #8c8c8c; font-style: italic;}
+.s1 { color: #080808;}
+.s2 { color: #0033b3;}
+.s3 { color: #067d17;}
+.s4 { color: #1750eb;}
+.s5 { color: #0037a6;}
+.s6 { color: #8a822d;}
+</style>
+</head>
+<body bgcolor="#ffffff">
+<table CELLSPACING=0 CELLPADDING=5 COLS=1 WIDTH="100%" BGCOLOR="#c0c0c0" >
+<tr><td><center>
+<font face="Arial, Helvetica" color="#000000">
+fetch.py</font>
+</center></td></tr></table>
+<pre><span class="s0">&quot;&quot;&quot; 
+Support for streaming http requests in emscripten. 
+ 
+A few caveats - 
+ 
+If your browser (or Node.js) has WebAssembly JavaScript Promise Integration enabled 
+https://github.com/WebAssembly/js-promise-integration/blob/main/proposals/js-promise-integration/Overview.md 
+*and* you launch pyodide using `pyodide.runPythonAsync`, this will fetch data using the 
+JavaScript asynchronous fetch api (wrapped via `pyodide.ffi.call_sync`). In this case 
+timeouts and streaming should just work. 
+ 
+Otherwise, it uses a combination of XMLHttpRequest and a web-worker for streaming. 
+ 
+This approach has several caveats: 
+ 
+Firstly, you can't do streaming http in the main UI thread, because atomics.wait isn't allowed. 
+Streaming only works if you're running pyodide in a web worker. 
+ 
+Secondly, this uses an extra web worker and SharedArrayBuffer to do the asynchronous fetch 
+operation, so it requires that you have crossOriginIsolation enabled, by serving over https 
+(or from localhost) with the two headers below set: 
+ 
+    Cross-Origin-Opener-Policy: same-origin 
+    Cross-Origin-Embedder-Policy: require-corp 
+ 
+You can tell if cross origin isolation is successfully enabled by looking at the global crossOriginIsolated variable in 
+JavaScript console. If it isn't, streaming requests will fallback to XMLHttpRequest, i.e. getting the whole 
+request into a buffer and then returning it. it shows a warning in the JavaScript console in this case. 
+ 
+Finally, the webworker which does the streaming fetch is created on initial import, but will only be started once 
+control is returned to javascript. Call `await wait_for_streaming_ready()` to wait for streaming fetch. 
+ 
+NB: in this code, there are a lot of JavaScript objects. They are named js_* 
+to make it clear what type of object they are. 
+&quot;&quot;&quot;</span>
+
+<span class="s2">from </span><span class="s1">__future__ </span><span class="s2">import </span><span class="s1">annotations</span>
+
+<span class="s2">import </span><span class="s1">io</span>
+<span class="s2">import </span><span class="s1">json</span>
+<span class="s2">from </span><span class="s1">email.parser </span><span class="s2">import </span><span class="s1">Parser</span>
+<span class="s2">from </span><span class="s1">importlib.resources </span><span class="s2">import </span><span class="s1">files</span>
+<span class="s2">from </span><span class="s1">typing </span><span class="s2">import </span><span class="s1">TYPE_CHECKING, Any</span>
+
+<span class="s2">import </span><span class="s1">js  </span><span class="s0"># type: ignore[import-not-found]</span>
+<span class="s2">from </span><span class="s1">pyodide.ffi </span><span class="s2">import </span><span class="s1">(  </span><span class="s0"># type: ignore[import-not-found]</span>
+    <span class="s1">JsArray,</span>
+    <span class="s1">JsException,</span>
+    <span class="s1">JsProxy,</span>
+    <span class="s1">to_js,</span>
+<span class="s1">)</span>
+
+<span class="s2">if </span><span class="s1">TYPE_CHECKING:</span>
+    <span class="s2">from </span><span class="s1">typing_extensions </span><span class="s2">import </span><span class="s1">Buffer</span>
+
+<span class="s2">from </span><span class="s1">.request </span><span class="s2">import </span><span class="s1">EmscriptenRequest</span>
+<span class="s2">from </span><span class="s1">.response </span><span class="s2">import </span><span class="s1">EmscriptenResponse</span>
+
+<span class="s3">&quot;&quot;&quot; 
+There are some headers that trigger unintended CORS preflight requests. 
+See also https://github.com/koenvo/pyodide-http/issues/22 
+&quot;&quot;&quot;</span>
+<span class="s1">HEADERS_TO_IGNORE = (</span><span class="s3">&quot;user-agent&quot;</span><span class="s1">,)</span>
+
+<span class="s1">SUCCESS_HEADER = -</span><span class="s4">1</span>
+<span class="s1">SUCCESS_EOF = -</span><span class="s4">2</span>
+<span class="s1">ERROR_TIMEOUT = -</span><span class="s4">3</span>
+<span class="s1">ERROR_EXCEPTION = -</span><span class="s4">4</span>
+
+
+<span class="s2">class </span><span class="s1">_RequestError(Exception):</span>
+    <span class="s2">def </span><span class="s1">__init__(</span>
+        <span class="s1">self,</span>
+        <span class="s1">message: str | </span><span class="s2">None </span><span class="s1">= </span><span class="s2">None</span><span class="s1">,</span>
+        <span class="s1">*,</span>
+        <span class="s1">request: EmscriptenRequest | </span><span class="s2">None </span><span class="s1">= </span><span class="s2">None</span><span class="s1">,</span>
+        <span class="s1">response: EmscriptenResponse | </span><span class="s2">None </span><span class="s1">= </span><span class="s2">None</span><span class="s1">,</span>
+    <span class="s1">):</span>
+        <span class="s1">self.request = request</span>
+        <span class="s1">self.response = response</span>
+        <span class="s1">self.message = message</span>
+        <span class="s1">super().__init__(self.message)</span>
+
+
+<span class="s2">class </span><span class="s1">_StreamingError(_RequestError):</span>
+    <span class="s2">pass</span>
+
+
+<span class="s2">class </span><span class="s1">_TimeoutError(_RequestError):</span>
+    <span class="s2">pass</span>
+
+
+<span class="s2">def </span><span class="s1">_obj_from_dict(dict_val: dict[str, Any]) -&gt; JsProxy:</span>
+    <span class="s2">return </span><span class="s1">to_js(dict_val, dict_converter=js.Object.fromEntries)</span>
+
+
+<span class="s2">class </span><span class="s1">_ReadStream(io.RawIOBase):</span>
+    <span class="s2">def </span><span class="s1">__init__(</span>
+        <span class="s1">self,</span>
+        <span class="s1">int_buffer: JsArray,</span>
+        <span class="s1">byte_buffer: JsArray,</span>
+        <span class="s1">timeout: float,</span>
+        <span class="s1">worker: JsProxy,</span>
+        <span class="s1">connection_id: int,</span>
+        <span class="s1">request: EmscriptenRequest,</span>
+    <span class="s1">):</span>
+        <span class="s1">self.int_buffer = int_buffer</span>
+        <span class="s1">self.byte_buffer = byte_buffer</span>
+        <span class="s1">self.read_pos = </span><span class="s4">0</span>
+        <span class="s1">self.read_len = </span><span class="s4">0</span>
+        <span class="s1">self.connection_id = connection_id</span>
+        <span class="s1">self.worker = worker</span>
+        <span class="s1">self.timeout = int(</span><span class="s4">1000 </span><span class="s1">* timeout) </span><span class="s2">if </span><span class="s1">timeout &gt; </span><span class="s4">0 </span><span class="s2">else None</span>
+        <span class="s1">self.is_live = </span><span class="s2">True</span>
+        <span class="s1">self._is_closed = </span><span class="s2">False</span>
+        <span class="s1">self.request: EmscriptenRequest | </span><span class="s2">None </span><span class="s1">= request</span>
+
+    <span class="s2">def </span><span class="s1">__del__(self) -&gt; </span><span class="s2">None</span><span class="s1">:</span>
+        <span class="s1">self.close()</span>
+
+    <span class="s0"># this is compatible with _base_connection</span>
+    <span class="s2">def </span><span class="s1">is_closed(self) -&gt; bool:</span>
+        <span class="s2">return </span><span class="s1">self._is_closed</span>
+
+    <span class="s0"># for compatibility with RawIOBase</span>
+    <span class="s1">@property</span>
+    <span class="s2">def </span><span class="s1">closed(self) -&gt; bool:</span>
+        <span class="s2">return </span><span class="s1">self.is_closed()</span>
+
+    <span class="s2">def </span><span class="s1">close(self) -&gt; </span><span class="s2">None</span><span class="s1">:</span>
+        <span class="s2">if </span><span class="s1">self.is_closed():</span>
+            <span class="s2">return</span>
+        <span class="s1">self.read_len = </span><span class="s4">0</span>
+        <span class="s1">self.read_pos = </span><span class="s4">0</span>
+        <span class="s1">self.int_buffer = </span><span class="s2">None</span>
+        <span class="s1">self.byte_buffer = </span><span class="s2">None</span>
+        <span class="s1">self._is_closed = </span><span class="s2">True</span>
+        <span class="s1">self.request = </span><span class="s2">None</span>
+        <span class="s2">if </span><span class="s1">self.is_live:</span>
+            <span class="s1">self.worker.postMessage(_obj_from_dict({</span><span class="s3">&quot;close&quot;</span><span class="s1">: self.connection_id}))</span>
+            <span class="s1">self.is_live = </span><span class="s2">False</span>
+        <span class="s1">super().close()</span>
+
+    <span class="s2">def </span><span class="s1">readable(self) -&gt; bool:</span>
+        <span class="s2">return True</span>
+
+    <span class="s2">def </span><span class="s1">writable(self) -&gt; bool:</span>
+        <span class="s2">return False</span>
+
+    <span class="s2">def </span><span class="s1">seekable(self) -&gt; bool:</span>
+        <span class="s2">return False</span>
+
+    <span class="s2">def </span><span class="s1">readinto(self, byte_obj: Buffer) -&gt; int:</span>
+        <span class="s2">if not </span><span class="s1">self.int_buffer:</span>
+            <span class="s2">raise </span><span class="s1">_StreamingError(</span>
+                <span class="s3">&quot;No buffer for stream in _ReadStream.readinto&quot;</span><span class="s1">,</span>
+                <span class="s1">request=self.request,</span>
+                <span class="s1">response=</span><span class="s2">None</span><span class="s1">,</span>
+            <span class="s1">)</span>
+        <span class="s2">if </span><span class="s1">self.read_len == </span><span class="s4">0</span><span class="s1">:</span>
+            <span class="s0"># wait for the worker to send something</span>
+            <span class="s1">js.Atomics.store(self.int_buffer, </span><span class="s4">0</span><span class="s1">, ERROR_TIMEOUT)</span>
+            <span class="s1">self.worker.postMessage(_obj_from_dict({</span><span class="s3">&quot;getMore&quot;</span><span class="s1">: self.connection_id}))</span>
+            <span class="s2">if </span><span class="s1">(</span>
+                <span class="s1">js.Atomics.wait(self.int_buffer, </span><span class="s4">0</span><span class="s1">, ERROR_TIMEOUT, self.timeout)</span>
+                <span class="s1">== </span><span class="s3">&quot;timed-out&quot;</span>
+            <span class="s1">):</span>
+                <span class="s2">raise </span><span class="s1">_TimeoutError</span>
+            <span class="s1">data_len = self.int_buffer[</span><span class="s4">0</span><span class="s1">]</span>
+            <span class="s2">if </span><span class="s1">data_len &gt; </span><span class="s4">0</span><span class="s1">:</span>
+                <span class="s1">self.read_len = data_len</span>
+                <span class="s1">self.read_pos = </span><span class="s4">0</span>
+            <span class="s2">elif </span><span class="s1">data_len == ERROR_EXCEPTION:</span>
+                <span class="s1">string_len = self.int_buffer[</span><span class="s4">1</span><span class="s1">]</span>
+                <span class="s0"># decode the error string</span>
+                <span class="s1">js_decoder = js.TextDecoder.new()</span>
+                <span class="s1">json_str = js_decoder.decode(self.byte_buffer.slice(</span><span class="s4">0</span><span class="s1">, string_len))</span>
+                <span class="s2">raise </span><span class="s1">_StreamingError(</span>
+                    <span class="s3">f&quot;Exception thrown in fetch: </span><span class="s5">{</span><span class="s1">json_str</span><span class="s5">}</span><span class="s3">&quot;</span><span class="s1">,</span>
+                    <span class="s1">request=self.request,</span>
+                    <span class="s1">response=</span><span class="s2">None</span><span class="s1">,</span>
+                <span class="s1">)</span>
+            <span class="s2">else</span><span class="s1">:</span>
+                <span class="s0"># EOF, free the buffers and return zero</span>
+                <span class="s0"># and free the request</span>
+                <span class="s1">self.is_live = </span><span class="s2">False</span>
+                <span class="s1">self.close()</span>
+                <span class="s2">return </span><span class="s4">0</span>
+        <span class="s0"># copy from int32array to python bytes</span>
+        <span class="s1">ret_length = min(self.read_len, len(memoryview(byte_obj)))</span>
+        <span class="s1">subarray = self.byte_buffer.subarray(</span>
+            <span class="s1">self.read_pos, self.read_pos + ret_length</span>
+        <span class="s1">).to_py()</span>
+        <span class="s1">memoryview(byte_obj)[</span><span class="s4">0</span><span class="s1">:ret_length] = subarray</span>
+        <span class="s1">self.read_len -= ret_length</span>
+        <span class="s1">self.read_pos += ret_length</span>
+        <span class="s2">return </span><span class="s1">ret_length</span>
+
+
+<span class="s2">class </span><span class="s1">_StreamingFetcher:</span>
+    <span class="s2">def </span><span class="s1">__init__(self) -&gt; </span><span class="s2">None</span><span class="s1">:</span>
+        <span class="s0"># make web-worker and data buffer on startup</span>
+        <span class="s1">self.streaming_ready = </span><span class="s2">False</span>
+        <span class="s1">streaming_worker_code = (</span>
+            <span class="s1">files(__package__)</span>
+            <span class="s1">.joinpath(</span><span class="s3">&quot;emscripten_fetch_worker.js&quot;</span><span class="s1">)</span>
+            <span class="s1">.read_text(encoding=</span><span class="s3">&quot;utf-8&quot;</span><span class="s1">)</span>
+        <span class="s1">)</span>
+        <span class="s1">js_data_blob = js.Blob.new(</span>
+            <span class="s1">to_js([streaming_worker_code], create_pyproxies=</span><span class="s2">False</span><span class="s1">),</span>
+            <span class="s1">_obj_from_dict({</span><span class="s3">&quot;type&quot;</span><span class="s1">: </span><span class="s3">&quot;application/javascript&quot;</span><span class="s1">}),</span>
+        <span class="s1">)</span>
+
+        <span class="s2">def </span><span class="s1">promise_resolver(js_resolve_fn: JsProxy, js_reject_fn: JsProxy) -&gt; </span><span class="s2">None</span><span class="s1">:</span>
+            <span class="s2">def </span><span class="s1">onMsg(e: JsProxy) -&gt; </span><span class="s2">None</span><span class="s1">:</span>
+                <span class="s1">self.streaming_ready = </span><span class="s2">True</span>
+                <span class="s1">js_resolve_fn(e)</span>
+
+            <span class="s2">def </span><span class="s1">onErr(e: JsProxy) -&gt; </span><span class="s2">None</span><span class="s1">:</span>
+                <span class="s1">js_reject_fn(e)  </span><span class="s0"># Defensive: never happens in ci</span>
+
+            <span class="s1">self.js_worker.onmessage = onMsg</span>
+            <span class="s1">self.js_worker.onerror = onErr</span>
+
+        <span class="s1">js_data_url = js.URL.createObjectURL(js_data_blob)</span>
+        <span class="s1">self.js_worker = js.globalThis.Worker.new(js_data_url)</span>
+        <span class="s1">self.js_worker_ready_promise = js.globalThis.Promise.new(promise_resolver)</span>
+
+    <span class="s2">def </span><span class="s1">send(self, request: EmscriptenRequest) -&gt; EmscriptenResponse:</span>
+        <span class="s1">headers = {</span>
+            <span class="s1">k: v </span><span class="s2">for </span><span class="s1">k, v </span><span class="s2">in </span><span class="s1">request.headers.items() </span><span class="s2">if </span><span class="s1">k </span><span class="s2">not in </span><span class="s1">HEADERS_TO_IGNORE</span>
+        <span class="s1">}</span>
+
+        <span class="s1">body = request.body</span>
+        <span class="s1">fetch_data = {</span><span class="s3">&quot;headers&quot;</span><span class="s1">: headers, </span><span class="s3">&quot;body&quot;</span><span class="s1">: to_js(body), </span><span class="s3">&quot;method&quot;</span><span class="s1">: request.method}</span>
+        <span class="s0"># start the request off in the worker</span>
+        <span class="s1">timeout = int(</span><span class="s4">1000 </span><span class="s1">* request.timeout) </span><span class="s2">if </span><span class="s1">request.timeout &gt; </span><span class="s4">0 </span><span class="s2">else None</span>
+        <span class="s1">js_shared_buffer = js.SharedArrayBuffer.new(</span><span class="s4">1048576</span><span class="s1">)</span>
+        <span class="s1">js_int_buffer = js.Int32Array.new(js_shared_buffer)</span>
+        <span class="s1">js_byte_buffer = js.Uint8Array.new(js_shared_buffer, </span><span class="s4">8</span><span class="s1">)</span>
+
+        <span class="s1">js.Atomics.store(js_int_buffer, </span><span class="s4">0</span><span class="s1">, ERROR_TIMEOUT)</span>
+        <span class="s1">js.Atomics.notify(js_int_buffer, </span><span class="s4">0</span><span class="s1">)</span>
+        <span class="s1">js_absolute_url = js.URL.new(request.url, js.location).href</span>
+        <span class="s1">self.js_worker.postMessage(</span>
+            <span class="s1">_obj_from_dict(</span>
+                <span class="s1">{</span>
+                    <span class="s3">&quot;buffer&quot;</span><span class="s1">: js_shared_buffer,</span>
+                    <span class="s3">&quot;url&quot;</span><span class="s1">: js_absolute_url,</span>
+                    <span class="s3">&quot;fetchParams&quot;</span><span class="s1">: fetch_data,</span>
+                <span class="s1">}</span>
+            <span class="s1">)</span>
+        <span class="s1">)</span>
+        <span class="s0"># wait for the worker to send something</span>
+        <span class="s1">js.Atomics.wait(js_int_buffer, </span><span class="s4">0</span><span class="s1">, ERROR_TIMEOUT, timeout)</span>
+        <span class="s2">if </span><span class="s1">js_int_buffer[</span><span class="s4">0</span><span class="s1">] == ERROR_TIMEOUT:</span>
+            <span class="s2">raise </span><span class="s1">_TimeoutError(</span>
+                <span class="s3">&quot;Timeout connecting to streaming request&quot;</span><span class="s1">,</span>
+                <span class="s1">request=request,</span>
+                <span class="s1">response=</span><span class="s2">None</span><span class="s1">,</span>
+            <span class="s1">)</span>
+        <span class="s2">elif </span><span class="s1">js_int_buffer[</span><span class="s4">0</span><span class="s1">] == SUCCESS_HEADER:</span>
+            <span class="s0"># got response</span>
+            <span class="s0"># header length is in second int of intBuffer</span>
+            <span class="s1">string_len = js_int_buffer[</span><span class="s4">1</span><span class="s1">]</span>
+            <span class="s0"># decode the rest to a JSON string</span>
+            <span class="s1">js_decoder = js.TextDecoder.new()</span>
+            <span class="s0"># this does a copy (the slice) because decode can't work on shared array</span>
+            <span class="s0"># for some silly reason</span>
+            <span class="s1">json_str = js_decoder.decode(js_byte_buffer.slice(</span><span class="s4">0</span><span class="s1">, string_len))</span>
+            <span class="s0"># get it as an object</span>
+            <span class="s1">response_obj = json.loads(json_str)</span>
+            <span class="s2">return </span><span class="s1">EmscriptenResponse(</span>
+                <span class="s1">request=request,</span>
+                <span class="s1">status_code=response_obj[</span><span class="s3">&quot;status&quot;</span><span class="s1">],</span>
+                <span class="s1">headers=response_obj[</span><span class="s3">&quot;headers&quot;</span><span class="s1">],</span>
+                <span class="s1">body=_ReadStream(</span>
+                    <span class="s1">js_int_buffer,</span>
+                    <span class="s1">js_byte_buffer,</span>
+                    <span class="s1">request.timeout,</span>
+                    <span class="s1">self.js_worker,</span>
+                    <span class="s1">response_obj[</span><span class="s3">&quot;connectionID&quot;</span><span class="s1">],</span>
+                    <span class="s1">request,</span>
+                <span class="s1">),</span>
+            <span class="s1">)</span>
+        <span class="s2">elif </span><span class="s1">js_int_buffer[</span><span class="s4">0</span><span class="s1">] == ERROR_EXCEPTION:</span>
+            <span class="s1">string_len = js_int_buffer[</span><span class="s4">1</span><span class="s1">]</span>
+            <span class="s0"># decode the error string</span>
+            <span class="s1">js_decoder = js.TextDecoder.new()</span>
+            <span class="s1">json_str = js_decoder.decode(js_byte_buffer.slice(</span><span class="s4">0</span><span class="s1">, string_len))</span>
+            <span class="s2">raise </span><span class="s1">_StreamingError(</span>
+                <span class="s3">f&quot;Exception thrown in fetch: </span><span class="s5">{</span><span class="s1">json_str</span><span class="s5">}</span><span class="s3">&quot;</span><span class="s1">, request=request, response=</span><span class="s2">None</span>
+            <span class="s1">)</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s2">raise </span><span class="s1">_StreamingError(</span>
+                <span class="s3">f&quot;Unknown status from worker in fetch: </span><span class="s5">{</span><span class="s1">js_int_buffer[</span><span class="s4">0</span><span class="s1">]</span><span class="s5">}</span><span class="s3">&quot;</span><span class="s1">,</span>
+                <span class="s1">request=request,</span>
+                <span class="s1">response=</span><span class="s2">None</span><span class="s1">,</span>
+            <span class="s1">)</span>
+
+
+<span class="s2">class </span><span class="s1">_JSPIReadStream(io.RawIOBase):</span>
+    <span class="s0">&quot;&quot;&quot; 
+    A read stream that uses pyodide.ffi.run_sync to read from a JavaScript fetch 
+    response. This requires support for WebAssembly JavaScript Promise Integration 
+    in the containing browser, and for pyodide to be launched via runPythonAsync. 
+ 
+    :param js_read_stream: 
+        The JavaScript stream reader 
+ 
+    :param timeout: 
+        Timeout in seconds 
+ 
+    :param request: 
+        The request we're handling 
+ 
+    :param response: 
+        The response this stream relates to 
+ 
+    :param js_abort_controller: 
+        A JavaScript AbortController object, used for timeouts 
+    &quot;&quot;&quot;</span>
+
+    <span class="s2">def </span><span class="s1">__init__(</span>
+        <span class="s1">self,</span>
+        <span class="s1">js_read_stream: Any,</span>
+        <span class="s1">timeout: float,</span>
+        <span class="s1">request: EmscriptenRequest,</span>
+        <span class="s1">response: EmscriptenResponse,</span>
+        <span class="s1">js_abort_controller: Any,  </span><span class="s0"># JavaScript AbortController for timeouts</span>
+    <span class="s1">):</span>
+        <span class="s1">self.js_read_stream = js_read_stream</span>
+        <span class="s1">self.timeout = timeout</span>
+        <span class="s1">self._is_closed = </span><span class="s2">False</span>
+        <span class="s1">self._is_done = </span><span class="s2">False</span>
+        <span class="s1">self.request: EmscriptenRequest | </span><span class="s2">None </span><span class="s1">= request</span>
+        <span class="s1">self.response: EmscriptenResponse | </span><span class="s2">None </span><span class="s1">= response</span>
+        <span class="s1">self.current_buffer = </span><span class="s2">None</span>
+        <span class="s1">self.current_buffer_pos = </span><span class="s4">0</span>
+        <span class="s1">self.js_abort_controller = js_abort_controller</span>
+
+    <span class="s2">def </span><span class="s1">__del__(self) -&gt; </span><span class="s2">None</span><span class="s1">:</span>
+        <span class="s1">self.close()</span>
+
+    <span class="s0"># this is compatible with _base_connection</span>
+    <span class="s2">def </span><span class="s1">is_closed(self) -&gt; bool:</span>
+        <span class="s2">return </span><span class="s1">self._is_closed</span>
+
+    <span class="s0"># for compatibility with RawIOBase</span>
+    <span class="s1">@property</span>
+    <span class="s2">def </span><span class="s1">closed(self) -&gt; bool:</span>
+        <span class="s2">return </span><span class="s1">self.is_closed()</span>
+
+    <span class="s2">def </span><span class="s1">close(self) -&gt; </span><span class="s2">None</span><span class="s1">:</span>
+        <span class="s2">if </span><span class="s1">self.is_closed():</span>
+            <span class="s2">return</span>
+        <span class="s1">self.read_len = </span><span class="s4">0</span>
+        <span class="s1">self.read_pos = </span><span class="s4">0</span>
+        <span class="s1">self.js_read_stream.cancel()</span>
+        <span class="s1">self.js_read_stream = </span><span class="s2">None</span>
+        <span class="s1">self._is_closed = </span><span class="s2">True</span>
+        <span class="s1">self._is_done = </span><span class="s2">True</span>
+        <span class="s1">self.request = </span><span class="s2">None</span>
+        <span class="s1">self.response = </span><span class="s2">None</span>
+        <span class="s1">super().close()</span>
+
+    <span class="s2">def </span><span class="s1">readable(self) -&gt; bool:</span>
+        <span class="s2">return True</span>
+
+    <span class="s2">def </span><span class="s1">writable(self) -&gt; bool:</span>
+        <span class="s2">return False</span>
+
+    <span class="s2">def </span><span class="s1">seekable(self) -&gt; bool:</span>
+        <span class="s2">return False</span>
+
+    <span class="s2">def </span><span class="s1">_get_next_buffer(self) -&gt; bool:</span>
+        <span class="s1">result_js = _run_sync_with_timeout(</span>
+            <span class="s1">self.js_read_stream.read(),</span>
+            <span class="s1">self.timeout,</span>
+            <span class="s1">self.js_abort_controller,</span>
+            <span class="s1">request=self.request,</span>
+            <span class="s1">response=self.response,</span>
+        <span class="s1">)</span>
+        <span class="s2">if </span><span class="s1">result_js.done:</span>
+            <span class="s1">self._is_done = </span><span class="s2">True</span>
+            <span class="s2">return False</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s1">self.current_buffer = result_js.value.to_py()</span>
+            <span class="s1">self.current_buffer_pos = </span><span class="s4">0</span>
+            <span class="s2">return True</span>
+
+    <span class="s2">def </span><span class="s1">readinto(self, byte_obj: Buffer) -&gt; int:</span>
+        <span class="s2">if </span><span class="s1">self.current_buffer </span><span class="s2">is None</span><span class="s1">:</span>
+            <span class="s2">if not </span><span class="s1">self._get_next_buffer() </span><span class="s2">or </span><span class="s1">self.current_buffer </span><span class="s2">is None</span><span class="s1">:</span>
+                <span class="s1">self.close()</span>
+                <span class="s2">return </span><span class="s4">0</span>
+        <span class="s1">ret_length = min(</span>
+            <span class="s1">len(byte_obj), len(self.current_buffer) - self.current_buffer_pos</span>
+        <span class="s1">)</span>
+        <span class="s1">byte_obj[</span><span class="s4">0</span><span class="s1">:ret_length] = self.current_buffer[</span>
+            <span class="s1">self.current_buffer_pos : self.current_buffer_pos + ret_length</span>
+        <span class="s1">]</span>
+        <span class="s1">self.current_buffer_pos += ret_length</span>
+        <span class="s2">if </span><span class="s1">self.current_buffer_pos == len(self.current_buffer):</span>
+            <span class="s1">self.current_buffer = </span><span class="s2">None</span>
+        <span class="s2">return </span><span class="s1">ret_length</span>
+
+
+<span class="s0"># check if we are in a worker or not</span>
+<span class="s2">def </span><span class="s1">is_in_browser_main_thread() -&gt; bool:</span>
+    <span class="s2">return </span><span class="s1">hasattr(js, </span><span class="s3">&quot;window&quot;</span><span class="s1">) </span><span class="s2">and </span><span class="s1">hasattr(js, </span><span class="s3">&quot;self&quot;</span><span class="s1">) </span><span class="s2">and </span><span class="s1">js.self == js.window</span>
+
+
+<span class="s2">def </span><span class="s1">is_cross_origin_isolated() -&gt; bool:</span>
+    <span class="s2">return </span><span class="s1">hasattr(js, </span><span class="s3">&quot;crossOriginIsolated&quot;</span><span class="s1">) </span><span class="s2">and </span><span class="s1">js.crossOriginIsolated</span>
+
+
+<span class="s2">def </span><span class="s1">is_in_node() -&gt; bool:</span>
+    <span class="s2">return </span><span class="s1">(</span>
+        <span class="s1">hasattr(js, </span><span class="s3">&quot;process&quot;</span><span class="s1">)</span>
+        <span class="s2">and </span><span class="s1">hasattr(js.process, </span><span class="s3">&quot;release&quot;</span><span class="s1">)</span>
+        <span class="s2">and </span><span class="s1">hasattr(js.process.release, </span><span class="s3">&quot;name&quot;</span><span class="s1">)</span>
+        <span class="s2">and </span><span class="s1">js.process.release.name == </span><span class="s3">&quot;node&quot;</span>
+    <span class="s1">)</span>
+
+
+<span class="s2">def </span><span class="s1">is_worker_available() -&gt; bool:</span>
+    <span class="s2">return </span><span class="s1">hasattr(js, </span><span class="s3">&quot;Worker&quot;</span><span class="s1">) </span><span class="s2">and </span><span class="s1">hasattr(js, </span><span class="s3">&quot;Blob&quot;</span><span class="s1">)</span>
+
+
+<span class="s1">_fetcher: _StreamingFetcher | </span><span class="s2">None </span><span class="s1">= </span><span class="s2">None</span>
+
+<span class="s2">if </span><span class="s1">is_worker_available() </span><span class="s2">and </span><span class="s1">(</span>
+    <span class="s1">(is_cross_origin_isolated() </span><span class="s2">and not </span><span class="s1">is_in_browser_main_thread())</span>
+    <span class="s2">and </span><span class="s1">(</span><span class="s2">not </span><span class="s1">is_in_node())</span>
+<span class="s1">):</span>
+    <span class="s1">_fetcher = _StreamingFetcher()</span>
+<span class="s2">else</span><span class="s1">:</span>
+    <span class="s1">_fetcher = </span><span class="s2">None</span>
+
+
+<span class="s1">NODE_JSPI_ERROR = (</span>
+    <span class="s3">&quot;urllib3 only works in Node.js with pyodide.runPythonAsync&quot;</span>
+    <span class="s3">&quot; and requires the flag --experimental-wasm-stack-switching in &quot;</span>
+    <span class="s3">&quot; versions of node &lt;24.&quot;</span>
+<span class="s1">)</span>
+
+
+<span class="s2">def </span><span class="s1">send_streaming_request(request: EmscriptenRequest) -&gt; EmscriptenResponse | </span><span class="s2">None</span><span class="s1">:</span>
+    <span class="s2">if </span><span class="s1">has_jspi():</span>
+        <span class="s2">return </span><span class="s1">send_jspi_request(request, </span><span class="s2">True</span><span class="s1">)</span>
+    <span class="s2">elif </span><span class="s1">is_in_node():</span>
+        <span class="s2">raise </span><span class="s1">_RequestError(</span>
+            <span class="s1">message=NODE_JSPI_ERROR,</span>
+            <span class="s1">request=request,</span>
+            <span class="s1">response=</span><span class="s2">None</span><span class="s1">,</span>
+        <span class="s1">)</span>
+
+    <span class="s2">if </span><span class="s1">_fetcher </span><span class="s2">and </span><span class="s1">streaming_ready():</span>
+        <span class="s2">return </span><span class="s1">_fetcher.send(request)</span>
+    <span class="s2">else</span><span class="s1">:</span>
+        <span class="s1">_show_streaming_warning()</span>
+        <span class="s2">return None</span>
+
+
+<span class="s1">_SHOWN_TIMEOUT_WARNING = </span><span class="s2">False</span>
+
+
+<span class="s2">def </span><span class="s1">_show_timeout_warning() -&gt; </span><span class="s2">None</span><span class="s1">:</span>
+    <span class="s2">global </span><span class="s1">_SHOWN_TIMEOUT_WARNING</span>
+    <span class="s2">if not </span><span class="s1">_SHOWN_TIMEOUT_WARNING:</span>
+        <span class="s1">_SHOWN_TIMEOUT_WARNING = </span><span class="s2">True</span>
+        <span class="s1">message = </span><span class="s3">&quot;Warning: Timeout is not available on main browser thread&quot;</span>
+        <span class="s1">js.console.warn(message)</span>
+
+
+<span class="s1">_SHOWN_STREAMING_WARNING = </span><span class="s2">False</span>
+
+
+<span class="s2">def </span><span class="s1">_show_streaming_warning() -&gt; </span><span class="s2">None</span><span class="s1">:</span>
+    <span class="s2">global </span><span class="s1">_SHOWN_STREAMING_WARNING</span>
+    <span class="s2">if not </span><span class="s1">_SHOWN_STREAMING_WARNING:</span>
+        <span class="s1">_SHOWN_STREAMING_WARNING = </span><span class="s2">True</span>
+        <span class="s1">message = </span><span class="s3">&quot;Can't stream HTTP requests because: </span><span class="s5">\n</span><span class="s3">&quot;</span>
+        <span class="s2">if not </span><span class="s1">is_cross_origin_isolated():</span>
+            <span class="s1">message += </span><span class="s3">&quot;  Page is not cross-origin isolated</span><span class="s5">\n</span><span class="s3">&quot;</span>
+        <span class="s2">if </span><span class="s1">is_in_browser_main_thread():</span>
+            <span class="s1">message += </span><span class="s3">&quot;  Python is running in main browser thread</span><span class="s5">\n</span><span class="s3">&quot;</span>
+        <span class="s2">if not </span><span class="s1">is_worker_available():</span>
+            <span class="s1">message += </span><span class="s3">&quot; Worker or Blob classes are not available in this environment.&quot;  </span><span class="s0"># Defensive: this is always False in browsers that we test in</span>
+        <span class="s2">if </span><span class="s1">streaming_ready() </span><span class="s2">is False</span><span class="s1">:</span>
+            <span class="s1">message += </span><span class="s3">&quot;&quot;&quot; Streaming fetch worker isn't ready. If you want to be sure that streaming fetch 
+is working, you need to call: 'await urllib3.contrib.emscripten.fetch.wait_for_streaming_ready()`&quot;&quot;&quot;</span>
+        <span class="s2">from </span><span class="s1">js </span><span class="s2">import </span><span class="s1">console</span>
+
+        <span class="s1">console.warn(message)</span>
+
+
+<span class="s2">def </span><span class="s1">send_request(request: EmscriptenRequest) -&gt; EmscriptenResponse:</span>
+    <span class="s2">if </span><span class="s1">has_jspi():</span>
+        <span class="s2">return </span><span class="s1">send_jspi_request(request, </span><span class="s2">False</span><span class="s1">)</span>
+    <span class="s2">elif </span><span class="s1">is_in_node():</span>
+        <span class="s2">raise </span><span class="s1">_RequestError(</span>
+            <span class="s1">message=NODE_JSPI_ERROR,</span>
+            <span class="s1">request=request,</span>
+            <span class="s1">response=</span><span class="s2">None</span><span class="s1">,</span>
+        <span class="s1">)</span>
+    <span class="s2">try</span><span class="s1">:</span>
+        <span class="s1">js_xhr = js.XMLHttpRequest.new()</span>
+
+        <span class="s2">if not </span><span class="s1">is_in_browser_main_thread():</span>
+            <span class="s1">js_xhr.responseType = </span><span class="s3">&quot;arraybuffer&quot;</span>
+            <span class="s2">if </span><span class="s1">request.timeout:</span>
+                <span class="s1">js_xhr.timeout = int(request.timeout * </span><span class="s4">1000</span><span class="s1">)</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s1">js_xhr.overrideMimeType(</span><span class="s3">&quot;text/plain; charset=ISO-8859-15&quot;</span><span class="s1">)</span>
+            <span class="s2">if </span><span class="s1">request.timeout:</span>
+                <span class="s0"># timeout isn't available on the main thread - show a warning in console</span>
+                <span class="s0"># if it is set</span>
+                <span class="s1">_show_timeout_warning()</span>
+
+        <span class="s1">js_xhr.open(request.method, request.url, </span><span class="s2">False</span><span class="s1">)</span>
+        <span class="s2">for </span><span class="s1">name, value </span><span class="s2">in </span><span class="s1">request.headers.items():</span>
+            <span class="s2">if </span><span class="s1">name.lower() </span><span class="s2">not in </span><span class="s1">HEADERS_TO_IGNORE:</span>
+                <span class="s1">js_xhr.setRequestHeader(name, value)</span>
+
+        <span class="s1">js_xhr.send(to_js(request.body))</span>
+
+        <span class="s1">headers = dict(Parser().parsestr(js_xhr.getAllResponseHeaders()))</span>
+
+        <span class="s2">if not </span><span class="s1">is_in_browser_main_thread():</span>
+            <span class="s1">body = js_xhr.response.to_py().tobytes()</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s1">body = js_xhr.response.encode(</span><span class="s3">&quot;ISO-8859-15&quot;</span><span class="s1">)</span>
+        <span class="s2">return </span><span class="s1">EmscriptenResponse(</span>
+            <span class="s1">status_code=js_xhr.status, headers=headers, body=body, request=request</span>
+        <span class="s1">)</span>
+    <span class="s2">except </span><span class="s1">JsException </span><span class="s2">as </span><span class="s1">err:</span>
+        <span class="s2">if </span><span class="s1">err.name == </span><span class="s3">&quot;TimeoutError&quot;</span><span class="s1">:</span>
+            <span class="s2">raise </span><span class="s1">_TimeoutError(err.message, request=request)</span>
+        <span class="s2">elif </span><span class="s1">err.name == </span><span class="s3">&quot;NetworkError&quot;</span><span class="s1">:</span>
+            <span class="s2">raise </span><span class="s1">_RequestError(err.message, request=request)</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s0"># general http error</span>
+            <span class="s2">raise </span><span class="s1">_RequestError(err.message, request=request)</span>
+
+
+<span class="s2">def </span><span class="s1">send_jspi_request(</span>
+    <span class="s1">request: EmscriptenRequest, streaming: bool</span>
+<span class="s1">) -&gt; EmscriptenResponse:</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Send a request using WebAssembly JavaScript Promise Integration 
+    to wrap the asynchronous JavaScript fetch api (experimental). 
+ 
+    :param request: 
+        Request to send 
+ 
+    :param streaming: 
+        Whether to stream the response 
+ 
+    :return: The response object 
+    :rtype: EmscriptenResponse 
+    &quot;&quot;&quot;</span>
+    <span class="s1">timeout = request.timeout</span>
+    <span class="s1">js_abort_controller = js.AbortController.new()</span>
+    <span class="s1">headers = {k: v </span><span class="s2">for </span><span class="s1">k, v </span><span class="s2">in </span><span class="s1">request.headers.items() </span><span class="s2">if </span><span class="s1">k </span><span class="s2">not in </span><span class="s1">HEADERS_TO_IGNORE}</span>
+    <span class="s1">req_body = request.body</span>
+    <span class="s1">fetch_data = {</span>
+        <span class="s3">&quot;headers&quot;</span><span class="s1">: headers,</span>
+        <span class="s3">&quot;body&quot;</span><span class="s1">: to_js(req_body),</span>
+        <span class="s3">&quot;method&quot;</span><span class="s1">: request.method,</span>
+        <span class="s3">&quot;signal&quot;</span><span class="s1">: js_abort_controller.signal,</span>
+    <span class="s1">}</span>
+    <span class="s0"># Node.js returns the whole response (unlike opaqueredirect in browsers),</span>
+    <span class="s0"># so urllib3 can set `redirect: manual` to control redirects itself.</span>
+    <span class="s0"># https://stackoverflow.com/a/78524615</span>
+    <span class="s2">if </span><span class="s1">_is_node_js():</span>
+        <span class="s1">fetch_data[</span><span class="s3">&quot;redirect&quot;</span><span class="s1">] = </span><span class="s3">&quot;manual&quot;</span>
+    <span class="s0"># Call JavaScript fetch (async api, returns a promise)</span>
+    <span class="s1">fetcher_promise_js = js.fetch(request.url, _obj_from_dict(fetch_data))</span>
+    <span class="s0"># Now suspend WebAssembly until we resolve that promise</span>
+    <span class="s0"># or time out.</span>
+    <span class="s1">response_js = _run_sync_with_timeout(</span>
+        <span class="s1">fetcher_promise_js,</span>
+        <span class="s1">timeout,</span>
+        <span class="s1">js_abort_controller,</span>
+        <span class="s1">request=request,</span>
+        <span class="s1">response=</span><span class="s2">None</span><span class="s1">,</span>
+    <span class="s1">)</span>
+    <span class="s1">headers = {}</span>
+    <span class="s1">header_iter = response_js.headers.entries()</span>
+    <span class="s2">while True</span><span class="s1">:</span>
+        <span class="s1">iter_value_js = header_iter.next()</span>
+        <span class="s2">if </span><span class="s1">getattr(iter_value_js, </span><span class="s3">&quot;done&quot;</span><span class="s1">, </span><span class="s2">False</span><span class="s1">):</span>
+            <span class="s2">break</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s1">headers[str(iter_value_js.value[</span><span class="s4">0</span><span class="s1">])] = str(iter_value_js.value[</span><span class="s4">1</span><span class="s1">])</span>
+    <span class="s1">status_code = response_js.status</span>
+    <span class="s1">body: bytes | io.RawIOBase = </span><span class="s6">b&quot;&quot;</span>
+
+    <span class="s1">response = EmscriptenResponse(</span>
+        <span class="s1">status_code=status_code, headers=headers, body=</span><span class="s6">b&quot;&quot;</span><span class="s1">, request=request</span>
+    <span class="s1">)</span>
+    <span class="s2">if </span><span class="s1">streaming:</span>
+        <span class="s0"># get via inputstream</span>
+        <span class="s2">if </span><span class="s1">response_js.body </span><span class="s2">is not None</span><span class="s1">:</span>
+            <span class="s0"># get a reader from the fetch response</span>
+            <span class="s1">body_stream_js = response_js.body.getReader()</span>
+            <span class="s1">body = _JSPIReadStream(</span>
+                <span class="s1">body_stream_js, timeout, request, response, js_abort_controller</span>
+            <span class="s1">)</span>
+    <span class="s2">else</span><span class="s1">:</span>
+        <span class="s0"># get directly via arraybuffer</span>
+        <span class="s0"># n.b. this is another async JavaScript call.</span>
+        <span class="s1">body = _run_sync_with_timeout(</span>
+            <span class="s1">response_js.arrayBuffer(),</span>
+            <span class="s1">timeout,</span>
+            <span class="s1">js_abort_controller,</span>
+            <span class="s1">request=request,</span>
+            <span class="s1">response=response,</span>
+        <span class="s1">).to_py()</span>
+    <span class="s1">response.body = body</span>
+    <span class="s2">return </span><span class="s1">response</span>
+
+
+<span class="s2">def </span><span class="s1">_run_sync_with_timeout(</span>
+    <span class="s1">promise: Any,</span>
+    <span class="s1">timeout: float,</span>
+    <span class="s1">js_abort_controller: Any,</span>
+    <span class="s1">request: EmscriptenRequest | </span><span class="s2">None</span><span class="s1">,</span>
+    <span class="s1">response: EmscriptenResponse | </span><span class="s2">None</span><span class="s1">,</span>
+<span class="s1">) -&gt; Any:</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Await a JavaScript promise synchronously with a timeout which is implemented 
+    via the AbortController 
+ 
+    :param promise: 
+        Javascript promise to await 
+ 
+    :param timeout: 
+        Timeout in seconds 
+ 
+    :param js_abort_controller: 
+        A JavaScript AbortController object, used on timeout 
+ 
+    :param request: 
+        The request being handled 
+ 
+    :param response: 
+        The response being handled (if it exists yet) 
+ 
+    :raises _TimeoutError: If the request times out 
+    :raises _RequestError: If the request raises a JavaScript exception 
+ 
+    :return: The result of awaiting the promise. 
+    &quot;&quot;&quot;</span>
+    <span class="s1">timer_id = </span><span class="s2">None</span>
+    <span class="s2">if </span><span class="s1">timeout &gt; </span><span class="s4">0</span><span class="s1">:</span>
+        <span class="s1">timer_id = js.setTimeout(</span>
+            <span class="s1">js_abort_controller.abort.bind(js_abort_controller), int(timeout * </span><span class="s4">1000</span><span class="s1">)</span>
+        <span class="s1">)</span>
+    <span class="s2">try</span><span class="s1">:</span>
+        <span class="s2">from </span><span class="s1">pyodide.ffi </span><span class="s2">import </span><span class="s1">run_sync</span>
+
+        <span class="s0"># run_sync here uses WebAssembly JavaScript Promise Integration to</span>
+        <span class="s0"># suspend python until the JavaScript promise resolves.</span>
+        <span class="s2">return </span><span class="s1">run_sync(promise)</span>
+    <span class="s2">except </span><span class="s1">JsException </span><span class="s2">as </span><span class="s1">err:</span>
+        <span class="s2">if </span><span class="s1">err.name == </span><span class="s3">&quot;AbortError&quot;</span><span class="s1">:</span>
+            <span class="s2">raise </span><span class="s1">_TimeoutError(</span>
+                <span class="s1">message=</span><span class="s3">&quot;Request timed out&quot;</span><span class="s1">, request=request, response=response</span>
+            <span class="s1">)</span>
+        <span class="s2">else</span><span class="s1">:</span>
+            <span class="s2">raise </span><span class="s1">_RequestError(message=err.message, request=request, response=response)</span>
+    <span class="s2">finally</span><span class="s1">:</span>
+        <span class="s2">if </span><span class="s1">timer_id </span><span class="s2">is not None</span><span class="s1">:</span>
+            <span class="s1">js.clearTimeout(timer_id)</span>
+
+
+<span class="s2">def </span><span class="s1">has_jspi() -&gt; bool:</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Return true if jspi can be used. 
+ 
+    This requires both browser support and also WebAssembly 
+    to be in the correct state - i.e. that the javascript 
+    call into python was async not sync. 
+ 
+    :return: True if jspi can be used. 
+    :rtype: bool 
+    &quot;&quot;&quot;</span>
+    <span class="s2">try</span><span class="s1">:</span>
+        <span class="s2">from </span><span class="s1">pyodide.ffi </span><span class="s2">import </span><span class="s1">can_run_sync, run_sync  </span><span class="s0"># noqa: F401</span>
+
+        <span class="s2">return </span><span class="s1">bool(can_run_sync())</span>
+    <span class="s2">except </span><span class="s1">ImportError:</span>
+        <span class="s2">return False</span>
+
+
+<span class="s2">def </span><span class="s1">_is_node_js() -&gt; bool:</span>
+    <span class="s0">&quot;&quot;&quot; 
+    Check if we are in Node.js. 
+ 
+    :return: True if we are in Node.js. 
+    :rtype: bool 
+    &quot;&quot;&quot;</span>
+    <span class="s2">return </span><span class="s1">(</span>
+        <span class="s1">hasattr(js, </span><span class="s3">&quot;process&quot;</span><span class="s1">)</span>
+        <span class="s2">and </span><span class="s1">hasattr(js.process, </span><span class="s3">&quot;release&quot;</span><span class="s1">)</span>
+        <span class="s0"># According to the Node.js documentation, the release name is always &quot;node&quot;.</span>
+        <span class="s2">and </span><span class="s1">js.process.release.name == </span><span class="s3">&quot;node&quot;</span>
+    <span class="s1">)</span>
+
+
+<span class="s2">def </span><span class="s1">streaming_ready() -&gt; bool | </span><span class="s2">None</span><span class="s1">:</span>
+    <span class="s2">if </span><span class="s1">_fetcher:</span>
+        <span class="s2">return </span><span class="s1">_fetcher.streaming_ready</span>
+    <span class="s2">else</span><span class="s1">:</span>
+        <span class="s2">return None  </span><span class="s0"># no fetcher, return None to signify that</span>
+
+
+<span class="s2">async def </span><span class="s1">wait_for_streaming_ready() -&gt; bool:</span>
+    <span class="s2">if </span><span class="s1">_fetcher:</span>
+        <span class="s2">await </span><span class="s1">_fetcher.js_worker_ready_promise</span>
+        <span class="s2">return True</span>
+    <span class="s2">else</span><span class="s1">:</span>
+        <span class="s2">return False</span>
+</pre>
+</body>
+</html>
